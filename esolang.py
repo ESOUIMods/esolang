@@ -78,14 +78,14 @@ def main():
 # Regular Expressions for Text Processing -------------------------------------
 """
 Here's a breakdown of how the reClientUntaged expression works:
-
-^: Matches the start of the line.
-\[(.+?)\]: Matches the content inside square brackets and captures it as a group (conIndex).
-= ": Matches the equals sign and opening double quote after the square brackets.
-(?!.*[{}]): Negative lookahead assertion to ensure that there are no curly braces anywhere in the line.
-((?:[CP]:)?\d+)?: Captures an optional group for tags like [C:7] or [P:10207].
-(.*?): Captures the main text content within double quotes (conText).
-"$|^(\[.+?\] = "")$": Matches the closing double quote at the end of the line or an empty line.
+^                  # Start of the line
+\[                 # Match an opening square bracket '['
+(.+?)              # Capture group 1: Match and capture any characters (the key/index)
+\] = "             # Match a closing square bracket ']' followed by space, equals sign '=', and double quote '"'
+(?!.*{[CP]:)       # Negative lookahead: Assert that there is no '{C:' or '{P:' in the string
+(.*?)              # Capture group 2: Match and capture any characters (the text value)
+"                  # Match double quote '"'
+$                  # End of the line
 """
 
 # Matches a language index in the format {{identifier:}}text
@@ -95,10 +95,13 @@ reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
 reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
 
 # Matches untagged client strings or empty lines in the format [key] = "value" or [key] = ""
-reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*[{}])((?:[CP]:)?\d+)?(.*?)"$|^(\[.+?\] = "")$')
+reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*{[CP]:)(.*?)"$')
 
 # Matches tagged client strings in the format [key] = "{tag:value}text"
-reClientTaged = re.compile(r'^\[(.+?)\] = "(\{(?:[CP]:)?\d+\})(.*?)"$')
+reClientTaged = re.compile(r'^\[(.+?)\] = "(?!.*[{])(?!.*{\d)(.*?)"$')
+
+# Matches empty client strings in the format [key] = ""
+reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
 
 # Matches a font tag in the format [Font:font_name]
 reFontTag = re.compile(r'^\[Font:(.+?)')
@@ -776,10 +779,14 @@ def combineClientFiles(client_filename, pregame_filename):
     def extract_constant(line):
         conIndex = None
         conText = None
-        match = reClientUntaged.match(line)
-        if match:
-            conIndex = match.group(1) or match.group(3)
-            conText = match.group(2) or ""
+        maClientUntaged = reClientUntaged.match(line)
+        maEmptyString = reEmptyString.match(line)
+        if maEmptyString:
+            conIndex = maEmptyString.group(1)  # Key (conIndex)
+            conText = '""'
+        elif maClientUntaged:
+            conIndex = maClientUntaged.group(1)  # Key (conIndex)
+            conText = maClientUntaged.group(2)  # Text content
         return conIndex, conText
 
     def add_line(line, conIndex, conText):
@@ -792,6 +799,7 @@ def combineClientFiles(client_filename, pregame_filename):
         with open(filename, 'r', encoding="utf8") as textInsClient:
             for line in textInsClient:
                 line = line.rstrip()
+                print(line)
                 if line.startswith("["):
                     conIndex, conText = extract_constant(line)
                     add_line(line, conIndex, conText)
@@ -867,10 +875,10 @@ def createWeblateFile(input_filename, langValue, langTag):
         with open(input_filename, 'r', encoding="utf8") as textIns:
             translations = {}
             for line in textIns:
-                match = reClientUntaged.match(line)
-                if match:
-                    conIndex = match.group(1) or match.group(3)
-                    conText = match.group(2) or ""
+                maClientUntaged = reClientUntaged.match(line)
+                if maClientUntaged:
+                    conIndex = maClientUntaged.group(1)  # Key (conIndex)
+                    conText = maClientUntaged.group(2)  # Text content
                     translations[conIndex] = conText
     except FileNotFoundError:
         print("{} not found. Aborting.".format(input_filename))
@@ -882,10 +890,9 @@ def createWeblateFile(input_filename, langValue, langTag):
 
     # Generate the YAML-like output
     with open(output_filename, 'w', encoding="utf8") as weblate_file:
-        weblate_file.write(langTag + ":\n")
+        weblate_file.write("weblate:\n")
         for conIndex, conText in translations.items():
-            weblate_file.write('  {}:\n'.format(conIndex))
-            weblate_file.write('    {}: "{}"\n'.format(langValue, conText))
+            weblate_file.write('  {}: "{}"\n'.format(conIndex, conText))
 
     print("Generated Weblate file: {}".format(output_filename))
 
@@ -1420,7 +1427,8 @@ def test_remove_tags():
 @mainFunction
 def test_add_tags():
     reFontTag = re.compile(r'^\[Font:(.+?)')
-    reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*[{}])((?:[CP]:)?\d+)?(.*?)"$|^(\[.+?\] = "")$')
+    reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*{[CP]:)(.*?)"$')
+    reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
 
     no_prefix_indexes = [
         "SI_PLAYER_NAME",
@@ -1447,6 +1455,9 @@ def test_add_tags():
         '[SI_LOCATION_NAME] = "Gonfalon Bay"',
         '[SI_ADDONLOADSTATE1] = ""',
         '[SI_PLAYER_NAME] = "<<1>>"',
+        '[SI_INTERACT_PROMPT_FORMAT_UNIT_NAME] = "<<C:1>>"',
+        '[SI_INTERACT_PROMPT_FORMAT_REMOTE_COMPANIONS_NAME] = "<<1>>''s <<2{Companion/Companion}>>"',
+        '[SI_INTERACT_PROMPT_FORMAT_UNIT_NAME_TAGGED] = "{C:5327}<<C:1>>"',
     ]
 
     indexPrefix = ""
@@ -1461,12 +1472,24 @@ def test_add_tags():
     for count, string in enumerate(test_strings, start=1):
         maFontTag = reFontTag.match(string)
         maClientUntaged = reClientUntaged.match(string)
+        maEmptyString = reEmptyString.match(string)
+
         if maFontTag:
             print(string)
             continue
+        elif maEmptyString:
+            conIndex = maEmptyString.group(1)  # Key (conIndex)
+            newString = '[{}] = ""'.format(conIndex)
+            print("String #{}:".format(count))
+            print("Group 0:", maEmptyString.group(0))
+            print("Group 1:", maEmptyString.group(1))
+            print(newString)
+            print()
         elif maClientUntaged:
             conIndex = maClientUntaged.group(1)  # Key (conIndex)
-            conText = maClientUntaged.group(3) if maClientUntaged.group(3) is not None else maClientUntaged.group(4)  # Text content
+            conText = maClientUntaged.group(2)  # Text content
+            conText = escape_special_characters(conText)
+
             if conText:
                 if conIndex in no_prefix_indexes:
                     newString = '[{}] = "{}"'.format(conIndex, conText)
@@ -1474,12 +1497,11 @@ def test_add_tags():
                     newString = '[{}] = "{{{}}}{}"'.format(conIndex, indexPrefix + str(count), conText)
             else:
                 newString = '[{}] = ""'.format(conIndex)
+
             print("String #{}:".format(count))
             print("Group 0:", maClientUntaged.group(0))
             print("Group 1:", maClientUntaged.group(1))
             print("Group 2:", maClientUntaged.group(2))
-            print("Group 3:", maClientUntaged.group(3))
-            print("Group 4:", maClientUntaged.group(4))
             print("conIndex:", conIndex)
             print("conText:", conText)
             print(newString)
