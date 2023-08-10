@@ -83,3 +83,5 @@
 /old_kr.lang.txt
 /test.txt
 /__pycache__
+/dist
+/build
