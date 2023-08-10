@@ -1406,6 +1406,52 @@ def diffEnglishLangFiles(LiveFilename, ptsFilename):
     # Write added indexes
     write_output_file("addedIndexes.txt", addedText, addedIndexCount, 'added')
 
+@mainFunction
+def apply_byte_offset_to_hangul(input_filename):
+    """
+    Apply Byte Offset to Korean Hangul Characters (BETA)
+
+    This function is in BETA stages and not currently used. It provides a simplified method
+    to apply a byte offset to Korean Hangul characters in the input text file, converting them
+    to Chinese UTF-8 characters starting from U+6E00. The result is saved in an "output.txt" file.
+
+    Args:
+        input_filename (str): The filename of the input text file containing Korean text.
+
+    Note:
+        This function is intended for experimental purposes and may not produce desired results.
+        It uses a simple character-based approach to apply the byte offset and does not use the
+        fontforge API. For accurate font manipulation, it's recommended to explore the use of
+        the fontforge API as demonstrated in previous examples.
+
+    Example:
+        Given an input text file 'korean_text.txt':
+        ```
+        가나다
+        ```
+
+        Calling `apply_byte_offset_to_hangul('korean_text.txt')` will create an "output.txt" file with:
+        ```
+        京京京
+        ```
+    """
+    output_filename = "output.txt"
+    
+    with open(input_filename, "r", encoding="utf-8") as input_file:
+        input_text = input_file.read()
+
+    converted_text = ""
+    for char in input_text:
+        char_code = ord(char)
+        if 0xAC00 <= char_code <= 0xD7A3:  # Korean Hangul range
+            target_code = char_code + (0x6E00 - 0xAC00) + 0xE000  # Adjust for 3-byte characters
+            converted_text += chr(target_code)
+        else:
+            converted_text += char
+
+    with open(output_filename, "w", encoding="utf-8") as output_file:
+        output_file.write(converted_text)
+        
 
 @mainFunction
 def test_section_functions():
