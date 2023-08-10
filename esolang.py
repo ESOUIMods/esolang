@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-#
 import argparse
 import sys
 import os
@@ -1610,4 +1609,7 @@ def print_groups():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--help-docstrings":
+        print_docstrings()
+    else:
+        main()
