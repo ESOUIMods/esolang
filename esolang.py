@@ -33,7 +33,7 @@ def print_docstrings():
         print("\nFunction: {}".format(func.__name__))
         docstring = inspect.getdoc(func)
         if docstring:
-            print(docstring)
+            print(docstring.encode('utf-8', errors='ignore').decode('utf-8'))
         else:
             print("No docstring available.")
 
@@ -291,13 +291,14 @@ def koreanToEso(txtFilename):
     Example:
         Given a source text file 'korean.txt' with Korean UTF-8 encoded text:
         ```
-        \uB098\uB294 \uAC00\uACE0 \uC2F6\uB2E4
+        나는 가고 싶다
         ```
 
         Calling `koreanToEso('korean.txt')` will produce an output file 'output.txt':
         ```
-        \u7280\u7440 \u6E00\u6EF0 \u84F6\u74E4
+        犘璔 渀滠 蓶瓤
         ```
+
     """
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
