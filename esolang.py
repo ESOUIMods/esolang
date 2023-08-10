@@ -11,6 +11,13 @@ from ruamel.yaml.scalarstring import PreservedScalarString
 import ruamel.yaml
 import section_constants as section
 
+"""
+From powershell 6.1.7600.16385 you may see question marks rather then the Korean or Chinese text on windows 7. 
+However, running esolang with powershell 7 on windows 10 the docstrings should print correctly. 
+On windows 7 in GitBash 2.35.1.2 you may see a UnicodeEncodeError charmap error.
+
+The issue is related to the encoding used when printing Unicode characters in different terminal environments.  
+"""
 # List to hold information about callable functions
 callable_functions = []
 
@@ -33,7 +40,8 @@ def print_docstrings():
         print("\nFunction: {}".format(func.__name__))
         docstring = inspect.getdoc(func)
         if docstring:
-            print(docstring.encode('utf-8', errors='ignore').decode('utf-8'))
+            encoded_docstring = docstring.encode('utf-8', errors='ignore').decode(sys.stdout.encoding)
+            print(encoded_docstring)
         else:
             print("No docstring available.")
 
