@@ -291,14 +291,13 @@ def koreanToEso(txtFilename):
     Example:
         Given a source text file 'korean.txt' with Korean UTF-8 encoded text:
         ```
-        나는 가고 싶다
+        \uB098\uB294 \uAC00\uACE0 \uC2F6\uB2E4
         ```
 
         Calling `koreanToEso('korean.txt')` will produce an output file 'output.txt':
         ```
-        犘璔 渀滠 蓶瓤
+        \u7280\u7440 \u6E00\u6EF0 \u84F6\u74E4
         ```
-
     """
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
