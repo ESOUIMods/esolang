@@ -6,6 +6,7 @@ import inspect
 import re
 import struct
 import codecs
+import chardet
 from difflib import SequenceMatcher
 from ruamel.yaml.scalarstring import PreservedScalarString
 import ruamel.yaml
@@ -562,6 +563,10 @@ def removeIndexFromEosui(txtFilename):
                 conText = maClientTaged.group(3)
                 lineOut = '[{}] = "{}"\n'.format(conIndex, conText)
                 textLines.append(lineOut)
+            # When text is present without {P:650} or {C:345}
+            if line is not None:
+                if not maFontTag and not maEmptyString and not maClientTaged:
+                    textLines.append(line + "\n")
 
     with open("output.txt", 'w', encoding="utf8") as out:
         for lineOut in textLines:
@@ -1203,6 +1208,27 @@ def calculate_similarity_and_threshold(text1, text2):
     return text1 == text2 or similarity_ratio > 0.6
 
 
+def calculate_similarity_ratio(text1, text2):
+    reColorTag = re.compile(r'\|c[0-9a-zA-Z]{1,6}|\|r')
+    reControlChar = re.compile(r'\^f|\^n|\^F|\^N|\^p|\^P')
+
+    # Check if either text1 or text2 is None
+    if text1 is None or text2 is None:
+        return False
+
+    # Remove color tags and control characters
+    subText1 = reColorTag.sub('', text1)
+    subText2 = reColorTag.sub('', text2)
+    subText1 = reControlChar.sub('', subText1)
+    subText2 = reControlChar.sub('', subText2)
+
+    # Calculate similarity ratio
+    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
+
+    # Return True only when similarity_ratio > 0.6
+    return similarity_ratio > 0.6
+
+
 @mainFunction
 def mergeCurrentLangText(translatedFilename, unTranslatedFilename):
     """Untested: Merge translated and untranslated language text for current live server files.
@@ -1313,40 +1339,42 @@ def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslat
                 ptsTextStripped = cleanText(ptsText)
                 # -- Assign lineOut to ptsText
                 lineOut = ptsText
-                hasTranslation = False
+                useTranslatedText = False
                 hasExtendedChars = isTranslatedText(translatedTextStripped)
-                # ---Determine Change Ratio between Live and Pts---
-                liveAndPtsGreaterThanThreshold = calculate_similarity_and_threshold(liveTextStripped, ptsTextStripped)
-                # ---Determine Change Ratio between Translated and Pts ---
-                translatedAndPtsGreaterThanThreshold = calculate_similarity_and_threshold(translatedTextStripped,
-                                                                                          ptsTextStripped)
                 writeOutput = False
-                # -- Determine if there is a questionable comparison
-                if translatedTextStripped and ptsTextStripped and not translatedAndPtsGreaterThanThreshold and not hasExtendedChars:
-                    if translatedTextStripped != ptsTextStripped:
-                        hasTranslation = True
-                        writeOutput = True
-                # Determine translation state ------------------------------
-                if not hasTranslation and hasExtendedChars:
-                    hasTranslation = True
-                if translatedTextStripped is None:
-                    hasTranslation = False
-                # -- changes between live and pts requires new translation
+                # ---Determine Change Ratio between Live and Pts---
+                liveAndPtsGreaterThanThreshold = False
+                # ---Determine Change Ratio between Translated and Pts ---
+                # translatedAndPtsGreaterThanThreshold = calculate_similarity_ratio(translatedTextStripped, ptsTextStripped)
+                # live deleted, discard live text
+                # live and pts the same, use translation
+                # live and pts slightly different, use translation
+                # live and pts very different, use pts Text
+                # pts new line, use pts Text
+
+                # hasTranslation is not named well, it means that it is acceptable to use
+                # translated text if it exists
+                if liveTextStripped is not None and ptsTextStripped is None:
+                    continue
                 if liveTextStripped is not None and ptsTextStripped is not None:
+                    liveAndPtsGreaterThanThreshold = calculate_similarity_ratio(liveTextStripped, ptsTextStripped)
+                    if liveTextStripped == ptsTextStripped or liveAndPtsGreaterThanThreshold:
+                        useTranslatedText = True
                     if not liveAndPtsGreaterThanThreshold:
-                        hasTranslation = False
-                # -- New Line from ptsText that did not exist previously
+                        useTranslatedText = False
+                        writeOutput = True
                 if liveTextStripped is None and ptsTextStripped is not None:
-                    hasTranslation = False
-                if hasTranslation:
+                    useTranslatedText = False
+
+                if useTranslatedText and translatedText is not None:
                     lineOut = translatedText
                 lineOut = '{{{{{}:}}}}{}\n'.format(key, lineOut.rstrip())
                 # -- Save questionable comparison to verify
                 if writeOutput:
-                    verifyOut.write('{{{{{}:}}}}{}\n'.format(key, translatedText.rstrip()))
-                    verifyOut.write('{{{{{}:}}}}{}\n'.format(key, liveText.rstrip()))
-                    verifyOut.write('{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
-                    verifyOut.write(lineOut)
+                    verifyOut.write('T{{{{{}:}}}}{}\n'.format(key, translatedText.rstrip()))
+                    verifyOut.write('L{{{{{}:}}}}{}\n'.format(key, liveText.rstrip()))
+                    verifyOut.write('P{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
+                    verifyOut.write('{{{}}}:{{{}}}\n'.format(liveAndPtsGreaterThanThreshold, lineOut))
                 out.write(lineOut)
 
 
@@ -1715,6 +1743,95 @@ def print_groups():
             print("Group 2:", maFontTag.group(2))
 
         print()
+
+
+@mainFunction
+def detect_encoding_for_each_char(inputFile):
+    """
+    This function reads each character from the specified binary file (inputFile)
+    and attempts to detect the encoding of each character individually using the
+    chardet library. It is important to note that this approach is for testing purposes
+    only and is not a definitive method to accurately determine the encoding of each
+    character. Encoding detection is a complex task, and relying on individual characters
+    may lead to inaccurate results.
+
+    Usage:
+    detect_encoding_for_each_char(inputFile)
+
+    Parameters:
+    - inputFile (str): The path to the binary file to be analyzed.
+
+    Note: The results are printed to the console, displaying the character and the
+    detected encoding for each. It is recommended not to use this method as a means
+    to argue or determine the encoding of a string comprehensively.
+
+    Example:
+    detect_encoding_for_each_char("example.bin")
+    """
+
+    not_eof = True
+    with open(inputFile, 'rb') as textIns:
+        while not_eof:
+            shift = 1
+            char = textIns.read(shift)
+            value = int.from_bytes(char, "big")
+            next_char = None
+            if value > 0x00 and value <= 0x74:
+                shift = 1
+            elif value >= 0xc0 and value <= 0xdf:
+                shift = 2
+            elif value >= 0xe0 and value <= 0xef:
+                shift = 3
+            elif value >= 0xf0 and value <= 0xf7:
+                shift = 4
+            if shift > 1:
+                next_char = textIns.read(shift - 1)
+            if next_char:
+                char = b''.join([char, next_char])
+            if not char:
+                # eof
+                break
+
+            result = chardet.detect(char)
+            detected_encoding = result['encoding']
+            print("Character: {}, Detected Encoding: {}".format(char.decode(detected_encoding, 'replace'), detected_encoding))
+
+
+@mainFunction
+def convert_file_encoding(inputFile):
+    not_eof = True
+    with open(inputFile, 'rb') as textIns:
+        with open("output.txt", 'w', encoding="utf-8") as out:
+            while not_eof:
+                shift = 1
+                char = textIns.read(shift)
+                value = int.from_bytes(char, "big")
+                next_char = None
+                if value > 0x00 and value <= 0x74:
+                    shift = 1
+                elif value >= 0xc0 and value <= 0xdf:
+                    shift = 2
+                elif value >= 0xe0 and value <= 0xef:
+                    shift = 3
+                elif value >= 0xf0 and value <= 0xf7:
+                    shift = 4
+                if shift > 1:
+                    next_char = textIns.read(shift - 1)
+                if next_char:
+                    char = b''.join([char, next_char])
+                if not char:
+                    # eof
+                    break
+
+                result = chardet.detect(char)
+                detected_encoding = result['encoding']
+                decoded_char = char.decode(detected_encoding, 'replace')
+
+                # Re-encode the decoded character to UTF-8
+                utf8_encoded_char = decoded_char.encode('utf-8')
+
+                # Write the re-encoded character to the output file
+                out.write(utf8_encoded_char.decode('utf-8'))
 
 
 if __name__ == "__main__":
