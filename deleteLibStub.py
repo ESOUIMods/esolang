@@ -3,13 +3,6 @@ import argparse
 import sys
 import os
 import inspect
-import re
-import struct
-import codecs
-from difflib import SequenceMatcher
-from ruamel.yaml.scalarstring import PreservedScalarString
-import ruamel.yaml
-import section_constants as section
 import shutil
 import fnmatch
 
@@ -73,40 +66,66 @@ def main():
     else:
         print("No command provided.")
 
+
 @mainFunction
 def delete_all_modification_folders():
+    r"""
+    Deletes embedded library folders from modification folders in the Elder Scrolls Online AddOns directory.
+
+    This function searches for specific library folders within each modification folder and deletes them.
+    Additionally, it removes any empty subfolders that remain after the deletions.
+
+    The script is intended to be run from the AddOns folder, typically located at:
+    C:\Users\[username]\Documents\Elder Scrolls Online\live\AddOns
+
+    Command to run:
+        deleteLibStub.exe delete_all_modification_folders
+
+    Returns:
+        None
+    """
+
+
     current_folder = os.getcwd()  # Get the current working directory
 
     # List of folder names to check and delete
-    folders_to_check = ['Lib3D', 'LibAddonMenu-2.0', 'LibAddonMenuOrderListBox', 'LibAddonMenuSoundSlider', 'LibAlchemy', 'LibAlchemyStation', 'LibAsync', 'LibBinaryEncode', 'LibCharacterKnowledge', 'LibChatMessage', 'LibCombat', 'LibCustomMenu', 'LibDateTime', 'LibDebugLogger', 'LibDialog', 'LibFeedback', 'LibFilters-3.0', 'LibFoodDrinkBuff', 'LibGetText', 'LibGPS', 'LibGroupSocket', 'LibGuildRoster', 'LibHistoire', 'LibLazyCrafting', 'LibMainMenu-2.0', 'LibMapData', 'LibMapPing', 'LibMapPins-1.0', 'LibMediaProvider-1.0', 'LibMsgWin-1.0', 'LibNotification', 'LibPhinixFunctions', 'LibPotionBuff', 'LibPrice', 'LibPromises', 'LibQuestData', 'LibResearch', 'LibSavedVars', 'LibScrollableMenu', 'LibSets', 'LibShifterBox', 'LibSlashCommander', 'LibStub', 'LibTableFunctions-1.0', 'LibTextFilter', 'LibZone']
+    folders_to_check = ['Lib3D', 'LibAddonMenu-2.0', 'LibAddonMenuOrderListBox', 'LibAddonMenuSoundSlider', 'LibAlchemy',
+                    'LibAlchemyStation', 'LibAsync', 'LibBinaryEncode', 'LibCharacterKnowledge', 'libChat2',
+                    'LibChatMessage', 'LibCombat', 'LibCustomMenu', 'LibDateTime', 'LibDebugLogger',
+                    'LibDialog', 'LibFeedback', 'LibFilters-3.0', 'LibFoodDrinkBuff', 'LibGetText', 'LibGPS',
+                    'LibGroupSocket', 'LibGuildRoster', 'LibHistoire', 'LibLazyCrafting', 'LibMainMenu-2.0',
+                    'LibMapData', 'LibMapPing', 'LibMapPins-1.0', 'LibMediaProvider-1.0', 'LibMsgWin-1.0',
+                    'LibNotification', 'LibPhinixFunctions', 'LibPotionBuff', 'LibPrice', 'LibPromises', 'LibQuestData',
+                    'LibResearch', 'LibSavedVars', 'LibScrollableMenu', 'LibSets', 'LibShifterBox', 'LibSlashCommander',
+                    'LibStub', 'LibTableFunctions-1.0', 'LibTextFilter', 'LibZone']
 
-    
     # Get the list of modification folders within the current working directory
-    modification_folders = [folder for folder in os.listdir(current_folder) if os.path.isdir(os.path.join(current_folder, folder))]
+    modification_folders = [folder for folder in os.listdir(current_folder) if
+                        os.path.isdir(os.path.join(current_folder, folder))]
 
     for modification_folder in modification_folders:
         modification_folder_path = os.path.join(current_folder, modification_folder)
 
-        # Recursively search for and delete specified folders within the modification folder
-        for folder_to_check in folders_to_check:
-            for root, dirs, files in os.walk(modification_folder_path):
-                matching_folders = fnmatch.filter(dirs, folder_to_check)
+    # Recursively search for and delete specified folders within the modification folder
+    for folder_to_check in folders_to_check:
+        for root, dirs, files in os.walk(modification_folder_path):
+            matching_folders = fnmatch.filter(dirs, folder_to_check)
 
-                for matching_folder in matching_folders:
-                    folder_path = os.path.join(root, matching_folder)
-                    print("Deleting {} folder under {}: {}".format(folder_to_check, modification_folder, folder_path))
-                    shutil.rmtree(folder_path)
+            for matching_folder in matching_folders:
+                folder_path = os.path.join(root, matching_folder)
+                print("Deleting {} folder under {}: {}".format(folder_to_check, modification_folder, folder_path))
+                shutil.rmtree(folder_path)
 
-        # Check if there are any subfolders remaining in the modification folder, and delete them if empty
-        remaining_subfolders = [subfolder for subfolder in os.listdir(modification_folder_path) if os.path.isdir(os.path.join(modification_folder_path, subfolder))]
+    # Check if there are any subfolders remaining in the modification folder, and delete them if empty
+    remaining_subfolders = [subfolder for subfolder in os.listdir(modification_folder_path) if
+                            os.path.isdir(os.path.join(modification_folder_path, subfolder))]
 
-        for remaining_subfolder in remaining_subfolders:
-            subfolder_path = os.path.join(modification_folder_path, remaining_subfolder)
-            
-            if not os.listdir(subfolder_path):
-                print("Deleting empty subfolder under {}: {}".format(modification_folder, subfolder_path))
-                os.rmdir(subfolder_path)
+    for remaining_subfolder in remaining_subfolders:
+        subfolder_path = os.path.join(modification_folder_path, remaining_subfolder)
 
+        if not os.listdir(subfolder_path):
+            print("Deleting empty subfolder under {}: {}".format(modification_folder, subfolder_path))
+            os.rmdir(subfolder_path)
 
 # To run the main function
 if __name__ == "__main__":
