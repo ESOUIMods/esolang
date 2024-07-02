@@ -463,6 +463,7 @@ def addIndexToEosui(txtFilename):
     """
 
     no_prefix_indexes = [
+        "SI_INTERACT_PROMPT_FORMAT_PLAYER_NAME",
         "SI_PLAYER_NAME",
         "SI_PLAYER_NAME_WITH_TITLE_FORMAT",
         "SI_MEGASERVER0",
@@ -478,7 +479,30 @@ def addIndexToEosui(txtFilename):
         "SI_KEYBINDINGS_LAYER_NOTIFICATIONS",
         "SI_KEYBINDINGS_LAYER_SIEGE",
         "SI_KEYBINDINGS_LAYER_USER_INTERFACE_SHORTCUTS",
-        "SI_KEYBINDINGS_LAYER_UTILITY_WHEEL"
+        "SI_KEYBINDINGS_LAYER_UTILITY_WHEEL",
+        "SI_SLASH_CAMP",
+        "SI_SLASH_CHATLOG",
+        "SI_SLASH_DUEL_INVITE",
+        "SI_SLASH_ENCOUNTER_LOG",
+        "SI_SLASH_FPS",
+        "SI_SLASH_GROUP_INVITE",
+        "SI_SLASH_JUMP_TO_FRIEND",
+        "SI_SLASH_JUMP_TO_GROUP_MEMBER",
+        "SI_SLASH_JUMP_TO_GUILD_MEMBER",
+        "SI_SLASH_JUMP_TO_LEADER",
+        "SI_SLASH_LATENCY",
+        "SI_SLASH_LOGOUT",
+        "SI_SLASH_PLAYED_TIME",
+        "SI_SLASH_QUIT",
+        "SI_SLASH_READY_CHECK",
+        "SI_SLASH_RELOADUI",
+        "SI_SLASH_REPORT_BUG",
+        "SI_SLASH_REPORT_CHAT",
+        "SI_SLASH_REPORT_FEEDBACK",
+        "SI_SLASH_REPORT_HELP",
+        "SI_SLASH_ROLL",
+        "SI_SLASH_SCRIPT",
+        "SI_SLASH_STUCK",
     ]
 
     textLines = []
@@ -1645,6 +1669,7 @@ def test_remove_tags():
 @mainFunction
 def test_add_tags():
     no_prefix_indexes = [
+        "SI_INTERACT_PROMPT_FORMAT_PLAYER_NAME",
         "SI_PLAYER_NAME",
         "SI_PLAYER_NAME_WITH_TITLE_FORMAT",
         "SI_MEGASERVER0",
@@ -1660,7 +1685,30 @@ def test_add_tags():
         "SI_KEYBINDINGS_LAYER_NOTIFICATIONS",
         "SI_KEYBINDINGS_LAYER_SIEGE",
         "SI_KEYBINDINGS_LAYER_USER_INTERFACE_SHORTCUTS",
-        "SI_KEYBINDINGS_LAYER_UTILITY_WHEEL"
+        "SI_KEYBINDINGS_LAYER_UTILITY_WHEEL",
+        "SI_SLASH_CAMP",
+        "SI_SLASH_CHATLOG",
+        "SI_SLASH_DUEL_INVITE",
+        "SI_SLASH_ENCOUNTER_LOG",
+        "SI_SLASH_FPS",
+        "SI_SLASH_GROUP_INVITE",
+        "SI_SLASH_JUMP_TO_FRIEND",
+        "SI_SLASH_JUMP_TO_GROUP_MEMBER",
+        "SI_SLASH_JUMP_TO_GUILD_MEMBER",
+        "SI_SLASH_JUMP_TO_LEADER",
+        "SI_SLASH_LATENCY",
+        "SI_SLASH_LOGOUT",
+        "SI_SLASH_PLAYED_TIME",
+        "SI_SLASH_QUIT",
+        "SI_SLASH_READY_CHECK",
+        "SI_SLASH_RELOADUI",
+        "SI_SLASH_REPORT_BUG",
+        "SI_SLASH_REPORT_CHAT",
+        "SI_SLASH_REPORT_FEEDBACK",
+        "SI_SLASH_REPORT_HELP",
+        "SI_SLASH_ROLL",
+        "SI_SLASH_SCRIPT",
+        "SI_SLASH_STUCK",
     ]
 
     indexPrefix = ""
