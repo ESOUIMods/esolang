@@ -786,7 +786,7 @@ def processSectionIDs(outputFileName, currentFileIndexes):
             sectionId = currentIndex['sectionId']
             if sectionId != currentSection:
                 sectionCount += 1
-                sectionOut.write('section_unknown_{} = {}\n'.format(sectionCount, sectionId))
+                sectionOut.write("    'section_unknown_{}': {{'sectionId': {}, 'sectionName': 'section_unknown_{}'}},\n".format(sectionCount, sectionId, sectionCount))
                 currentSection = sectionId
 
 
@@ -1395,7 +1395,8 @@ def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslat
                 lineOut = '{{{{{}:}}}}{}\n'.format(key, lineOut.rstrip())
                 # -- Save questionable comparison to verify
                 if writeOutput:
-                    verifyOut.write('T{{{{{}:}}}}{}\n'.format(key, translatedText.rstrip()))
+                    if translatedText is not None:
+                        verifyOut.write('T{{{{{}:}}}}{}\n'.format(key, translatedText.rstrip()))
                     verifyOut.write('L{{{{{}:}}}}{}\n'.format(key, liveText.rstrip()))
                     verifyOut.write('P{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
                     verifyOut.write('{{{}}}:{{{}}}\n'.format(liveAndPtsGreaterThanThreshold, lineOut))
