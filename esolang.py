@@ -8,9 +8,11 @@ import struct
 import codecs
 import chardet
 from difflib import SequenceMatcher
-from ruamel.yaml.scalarstring import PreservedScalarString
 import ruamel.yaml
+from ruamel.yaml.scalarstring import PreservedScalarString
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
+import polib
 
 """
 From powershell 6.1.7600.16385 you may see question marks rather then the Korean or Chinese text on windows 7.
@@ -106,10 +108,10 @@ reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
 reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
 
 # Matches untagged client strings or empty lines in the format [key] = "value" or [key] = ""
-reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*{[CP]:)(.*?)"$')
+reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
 
 # Matches tagged client strings in the format [key] = "{tag:value}text"
-reClientTaged = re.compile(r'^\[(.+?)\] = "(\{[CP]:.+?\})(.+?)"$')
+reClientTaged = re.compile(r'^\[(.+?)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
 
 # Matches empty client strings in the format [key] = ""
 reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
@@ -117,11 +119,16 @@ reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
 # Matches a font tag in the format [Font:font_name]
 reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 
+# Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
+reGenderSuffix = re.compile(r'\^[MmFfNn]')
+
 # Global Dictionaries ---------------------------------------------------------
 textUntranslatedLiveDict = {}
 textUntranslatedPTSDict = {}
 textTranslatedDict = {}
 textUntranslatedDict = {}
+textClientDict = {}
+textPregameDict = {}
 
 # Global Dictionaries Use for reading en.lang, en_pts.lang, kr.lang -----------
 currentFileIndexes = {}
@@ -148,8 +155,75 @@ def get_section_key_by_id(section_id):
     return None
 
 
-def escape_special_characters(text):
+def escape_lua_string(text):
     return text.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace(r'\\\"', r'\"')
+
+
+def preserve_and_restore_escaped_sequences(text):
+    """
+    Preserve escaped sequences using placeholders, then restore them after transformations.
+
+    Args:
+        text (str): Input string possibly containing escaped sequences.
+
+    Returns:
+        str: Transformed string with escaped sequences preserved and restored.
+    """
+    # Preserve sequences
+    text = text.replace('\\\\', '-=DS=-')  # Escaped backslashes
+    text = text.replace('\\n', '-=CR=-')  # Escaped newlines
+    text = re.sub(r'\s+\\$', '-=ELS=-', text)  # Trailing backslash with optional whitespace
+    text = text.replace('\\"', '-=DQ=-')  # Escaped double quotes
+    text = text.replace('\\', '')  # Remove any remaining lone backslashes
+
+    # Restore sequences
+    text = text.replace('-=DS=-', '\\\\')
+    text = text.replace('-=CR=-', '\\n')
+    text = text.replace('-=ELS=-', '')  # End-of-line backslash removal
+    text = text.replace('-=DQ=-', '\\"')
+
+    return text
+
+
+def preserve_escaped_sequences(text):
+    """
+    Convert Lua-style escape sequences to temporary placeholders to prevent interference during formatting.
+    """
+    return (
+        text
+            .replace("\\n", "-=CR=-")
+            .replace('\\"', "-=EQ=-")
+            .replace("\\\\", "-=DS=-")
+    )
+
+
+def preserve_escaped_sequences_bytes(raw_bytes):
+    """
+    Replaces common escape sequences in a bytes object with placeholders before decoding.
+
+    Args:
+        raw_bytes (bytes): e.g., b"Line1\\nLine2"
+
+    Returns:
+        str: A string with preserved escape sequences (e.g., "Line1-=CR=-Line2")
+    """
+    raw_bytes = (
+        raw_bytes
+            .replace(b"\n", b"-=CR=-")
+    )
+    return raw_bytes
+
+
+def restore_escaped_sequences(text):
+    """
+    Restore temporary placeholders back to Lua-style escape sequences.
+    """
+    return (
+        text
+            .replace("-=CR=-", "\\n")
+            .replace("-=EQ=-", '\\"')
+            .replace("-=DS=-", "\\\\")
+    )
 
 
 def isTranslatedText(line):
@@ -158,8 +232,14 @@ def isTranslatedText(line):
     return any(ord(char) > 127 for char in line)
 
 
+# Read and write binary structs
+def readUInt32(file): return struct.unpack('>I', file.read(4))[0]
+
+
+def writeUInt32(file, value): file.write(struct.pack('>I', value))
+
+
 # Conversion ------------------------------------------------------------------
-# (txtFilename, idFilename)
 @mainFunction
 def addIndexToLangFile(txtFilename, idFilename):
     """
@@ -459,9 +539,7 @@ def addIndexToEosui(txtFilename):
         [SI_PLAYER_NAME] = "{C:1}Player Name"
         [SI_PLAYER_LEVEL] = "{C:2}Player Level"
         ```
-
     """
-
     no_prefix_indexes = [
         "SI_INTERACT_PROMPT_FORMAT_PLAYER_NAME",
         "SI_PLAYER_NAME",
@@ -523,16 +601,19 @@ def addIndexToEosui(txtFilename):
                 textLines.append(line)
                 continue
             elif maEmptyString:
-                conIndex = maEmptyString.group(1)  # Key (conIndex)
+                conIndex = maEmptyString.group(1)
                 lineOut = '[{}] = ""\n'.format(conIndex)
                 textLines.append(lineOut)
             elif maClientUntaged:
-                conIndex = maClientUntaged.group(1)  # Key (conIndex)
-                conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
-                if conIndex not in no_prefix_indexes and maClientUntaged.group(2) is not None:
-                    lineOut = '[{}] = "{{{}}}{}"\n'.format(conIndex, indexPrefix + str(indexCount), conText)
+                conIndex = maClientUntaged.group(1)
+                conText = maClientUntaged.group(2) or ''
+                conTextPreserved = preserve_escaped_sequences(conText)
+                if conIndex not in no_prefix_indexes:
+                    formattedLine = '[{}] = "{{{}}}{}"\n'.format(conIndex, indexPrefix + str(indexCount),
+                                                                 conTextPreserved)
                 else:
-                    lineOut = '[{}] = "{}"\n'.format(conIndex, conText)
+                    formattedLine = '[{}] = "{}"\n'.format(conIndex, conTextPreserved)
+                lineOut = restore_escaped_sequences(formattedLine)
                 textLines.append(lineOut)
 
     with open("output.txt", 'w', encoding="utf8") as out:
@@ -585,22 +666,92 @@ def removeIndexFromEosui(txtFilename):
             if maClientTaged:
                 conIndex = maClientTaged.group(1)
                 conText = maClientTaged.group(3)
-                lineOut = '[{}] = "{}"\n'.format(conIndex, conText)
+                escaped = preserve_escaped_sequences(conText)
+                formatted = '[{}] = "{}"\n'.format(conIndex, escaped)
+                lineOut = restore_escaped_sequences(formatted)
                 textLines.append(lineOut)
-            # When text is present without {P:650} or {C:345}
-            if line is not None:
-                if not maFontTag and not maEmptyString and not maClientTaged:
-                    textLines.append(line + "\n")
+            elif line:
+                textLines.append(line + "\n")
 
     with open("output.txt", 'w', encoding="utf8") as out:
         for lineOut in textLines:
             out.write(lineOut)
 
 
-def readUInt32(file): return struct.unpack('>I', file.read(4))[0]
+@mainFunction
+def strip_gender_suffix(input_file, output_file="output.txt"):
+    """
+    Reads a text file and removes ^M, ^F, ^m, ^f, ^N, ^n suffixes from all matching lines.
+
+    Args:
+        input_file (str): The source file containing ESO lang-formatted lines.
+        output_file (str): The output file with cleaned names.
+    """
+
+    with open(input_file, 'r', encoding='utf8') as infile, open(output_file, 'w', encoding='utf8') as outfile:
+        for line in infile:
+            cleaned_line = reGenderSuffix.sub('', line)
+            outfile.write(cleaned_line)
+
+    print("Stripped gender suffixes and saved to {}".format(output_file))
 
 
-def writeUInt32(file, value): file.write(struct.pack('>I', value))
+@mainFunction
+def extract_npc_name_matches(tagged_txt_file, lua_input_file):
+    """
+    Parses a tagged ESO language file and a Lua file of known NPC names, then writes out two Lua files:
+    one for matched names using stringIndex as keys and one for unmatched ones.
+
+    Args:
+        tagged_txt_file (str): File with lines like {{8290981-0-123:}}Julien Rissiel^M
+        lua_input_file (str): Lua file with [npc_id] = "Name", lines
+    """
+    textUntranslatedLiveDict = {}
+    readTaggedLangFile(tagged_txt_file, textUntranslatedLiveDict)
+
+    # Build a cleaned name -> first stringIndex mapping from tagged lang file
+    name_to_stringIndex = {}
+    for tag, rawname in textUntranslatedLiveDict.items():
+        cleaned_name = reGenderSuffix.sub('', rawname.strip())
+        if cleaned_name not in name_to_stringIndex:
+            parts = tag.split('-')
+            if len(parts) == 3:
+                string_index = int(parts[2])
+                name_to_stringIndex[cleaned_name] = string_index
+
+    matched_output = []
+    unmatched_output = []
+
+    in_table = False
+    with open(lua_input_file, 'r', encoding='utf8') as luain:
+        for line in luain:
+            if 'lib.quest_givers["en"]' in line:
+                in_table = True
+                continue
+            if in_table and '}' in line:
+                break
+
+            match = re.match(r'\s*\[(\d+)\]\s*=\s*"(.+?)",?', line)
+            if match:
+                npc_id = int(match.group(1))
+                name = match.group(2).strip()
+                if name in name_to_stringIndex:
+                    string_index = name_to_stringIndex[name]
+                    matched_output.append('    [{}] = "{}",'.format(string_index, name))
+                else:
+                    unmatched_output.append('    [{}] = "{}",'.format(npc_id, name))
+
+    with open("npc_names_matched.lua", 'w', encoding='utf8') as out:
+        out.write("return {\n")
+        out.write("\n".join(matched_output))
+        out.write("\n}\n")
+
+    with open("npc_names_unmatched.lua", 'w', encoding='utf8') as out:
+        out.write("return {\n")
+        out.write("\n".join(unmatched_output))
+        out.write("\n}\n")
+
+    print("Done. Wrote matched and unmatched NPC name files.")
 
 
 def readNullStringByChar(offset, start, file):
@@ -786,7 +937,9 @@ def processSectionIDs(outputFileName, currentFileIndexes):
             sectionId = currentIndex['sectionId']
             if sectionId != currentSection:
                 sectionCount += 1
-                sectionOut.write("    'section_unknown_{}': {{'sectionId': {}, 'sectionName': 'section_unknown_{}'}},\n".format(sectionCount, sectionId, sectionCount))
+                sectionOut.write(
+                    "    'section_unknown_{}': {{'sectionId': {}, 'sectionName': 'section_unknown_{}'}},\n".format(
+                        sectionCount, sectionId, sectionCount))
                 currentSection = sectionId
 
 
@@ -820,261 +973,53 @@ def extractSectionIDs(currentLanguageFile, outputFileName):
 
 
 @mainFunction
-def combineClientFiles(client_filename, pregame_filename):
+def extractSectionEntries(langFile, section_arg, useName=True):
     """
-    Combine content from en_client.str and en_pregame.str files.
-
-    This function reads the content of en_client.str and en_pregame.str files, extracts
-    constant entries that match the pattern defined by reClientUntaged, and saves the combined
-    information into an 'output.txt' file. The goal is to avoid duplication of SI_ constants
-    by combining the entries from both files. If a constant exists in both files, only one
-    entry will be written to the output file to eliminate duplicated constants for translation.
+    Extracts all entries from a language file for a specific section (by name or ID).
 
     Args:
-        client_filename (str): The filename of the en_client.str file.
-        pregame_filename (str): The filename of the en_pregame.str file.
+        langFile (str): The .lang file to read (e.g., en.lang).
+        section_arg (str|int): Either the section name (e.g., "lorebook_names") or numeric section ID (e.g., 3427285).
+        useName (bool): If True, filenames will include both ID and section name (if known). Default is False.
 
-    Notes:
-        This function uses regular expressions to identify and extract constant entries
-        from the input files. The extracted entries are then formatted and stored in the
-        'output.txt' file.
-
-    Example:
-        Given en_client.str:
-        ```
-        [SI_MY_CONSTANT] = "My Constant Text"
-        [SI_CONSTANT] = "Some Constant Text"
-        ```
-
-        Given en_pregame.str:
-        ```
-        [SI_CONSTANT] = "Some Constant Text"
-        [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
-        ```
-
-        Calling `combineClientFiles('en_client.str', 'en_pregame.str')` will produce an output file 'output.txt':
-        ```
-        [SI_MY_CONSTANT] = "My Constant Text"
-        [SI_CONSTANT] = "Some Constant Text"
-        [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
-        ```
-
+    Writes:
+        <sectionId>.txt or <sectionId>-<sectionName>.txt
     """
-    textLines = []
-    conIndex_set = set()
-
-    def extract_constant(line):
-        conIndex = None
-        conText = None
-        maClientUntaged = reClientUntaged.match(line)
-        maEmptyString = reEmptyString.match(line)
-        if maEmptyString:
-            conIndex = maEmptyString.group(1)  # Key (conIndex)
-            conText = ''
-        elif maClientUntaged:
-            conIndex = maClientUntaged.group(1)  # Key (conIndex)
-            conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
-        return conIndex, conText
-
-    def add_line(conIndex, conText):
-        if conIndex not in conIndex_set:
-            escaped_conText = escape_special_characters(conText)
-            textLines.append('[{}] = "{}"\n'.format(conIndex, escaped_conText))
-            conIndex_set.add(conIndex)
-
-    def process_text_file(filename):
-        with open(filename, 'r', encoding="utf8") as textInsClient:
-            for line in textInsClient:
-                line = line.rstrip()
-                if line.startswith("["):
-                    conIndex, conText = extract_constant(line)
-                    add_line(conIndex, conText)
-                else:
-                    textLines.append(line + "\n")
-
-    # Process client.str file
-    process_text_file(client_filename)
-    # Process pregame.str file
-    process_text_file(pregame_filename)
-
-    # Write output to output.txt
-    with open("output.txt", 'w', encoding="utf8") as out:
-        for lineOut in textLines:
-            out.write(lineOut)
-
-
-@mainFunction
-def createWeblateFile(input_filename, langValue, langTag):
-    """
-    Generate separate YAML-like files for Weblate translation.
-
-    This function reads the 'output.txt' file generated by the combineClientFiles function
-    and creates separate YAML-like files for use with Weblate translation. The langValue parameter
-    is used to specify the language value, such as 'turkish', to be used as the name of the translated
-    string in the resulting YAML files. The langTag parameter specifies the language tag to be used
-    as the first line in the output files.
-
-    Args:
-        input_filename (str): The filename of the 'output.txt' file generated by combineClientFiles.
-        langValue (str): The language value to use as the name of the translated string.
-        langTag (str): The language tag to be used as the first line in the output files.
-
-    Notes:
-        This function extracts constant entries using the reClientUntaged pattern from the input file,
-        creates separate dictionaries of translations for each language, and generates separate YAML-like
-        files with the format suitable for Weblate.
-
-    Example:
-        Given 'output.txt':
-        ```
-        [SI_MY_CONSTANT] = "My Constant Text"
-        [SI_CONSTANT] = "Some Constant Text"
-        [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
-        ```
-
-        Calling `createWeblateFile('output.txt', 'turkish', 'tr')` will produce two output files:
-        - 'output_tr.yaml':
-          ```
-          tr:
-            SI_MY_CONSTANT:
-              turkish: "My Constant Text"
-            SI_CONSTANT:
-              turkish: "Some Constant Text"
-            SI_ADDITIONAL_CONSTANT:
-              turkish: "Additional Constant Text"
-          ```
-        - 'output_en.yaml':
-          ```
-          en:
-            SI_MY_CONSTANT:
-              english: "My Constant Text"
-            SI_CONSTANT:
-              english: "Some Constant Text"
-            SI_ADDITIONAL_CONSTANT:
-              english: "Additional Constant Text"
-          ```
-
-    """
-    output_filename = os.path.splitext(input_filename)[0] + "_output_" + langTag + ".yaml"
-
     try:
-        with open(input_filename, 'r', encoding="utf8") as textIns:
-            translations = {}
-            for line in textIns:
-                maEmptyString = reEmptyString.match(line)
-                maClientUntaged = reClientUntaged.match(line)
-                if maEmptyString:
-                    conIndex = maEmptyString.group(1)  # Key (conIndex)
-                    conText = ''
-                    translations[conIndex] = conText
-                elif maClientUntaged:
-                    conIndex = maClientUntaged.group(1)  # Key (conIndex)
-                    conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
-                    translations[conIndex] = conText
-    except FileNotFoundError:
-        print("{} not found. Aborting.".format(input_filename))
-        return
+        section_id = int(section_arg)
+        section_key = get_section_key_by_id(section_id)
+        if useName and section_key and not re.match(r'section_unknown_\d+$', section_key):
+            output_name = "{}_{}.txt".format(section_id, section_key)
+        else:
+            output_name = "{}.txt".format(section_id)
+    except ValueError:
+        section_id = get_section_id(section_arg)
+        if section_id is None:
+            print("Error: Unknown section name '{}'".format(section_arg))
+            return
+        section_key = section_arg
+        if useName:
+            output_name = "{}-{}.txt".format(section_id, section_key)
+        else:
+            output_name = "{}.txt".format(section_id)
 
-    if not translations:
-        print("No translations found in {}. Aborting.".format(input_filename))
-        return
+    fileIndexes, fileStrings = readLangFile(langFile)
 
-    # Generate the YAML-like output
-    with open(output_filename, 'w', encoding="utf8") as weblate_file:
-        weblate_file.write("weblate:\n")
-        for conIndex, conText in translations.items():
-            weblate_file.write('  {}: "{}"\n'.format(conIndex, conText))
+    with open(output_name, "w", encoding="utf8") as out:
+        for i in range(fileIndexes['numIndexes']):
+            entry = fileIndexes[i]
+            if entry['sectionId'] == section_id:
+                secId = entry['sectionId']
+                secIdx = entry['sectionIndex']
+                strIdx = entry['stringIndex']
+                raw_bytes = entry['string']
+                escaped_bytes = preserve_escaped_sequences_bytes(raw_bytes)
+                utf8_string = bytes(escaped_bytes).decode("utf8", errors="replace")
+                formatted = "{{{{{}-{}-{}:}}}}{}\n".format(secId, secIdx, strIdx, utf8_string)
+                lineOut = restore_escaped_sequences(formatted)
+                out.write(lineOut)
 
-    print("Generated Weblate file: {}".format(output_filename))
-
-
-@mainFunction
-def importClientTranslations(inputYaml, inputClientFile, langValue):
-    """
-    Import translated text from a YAML file into the client or pregame file.
-
-    This function reads the translated text from the specified inputYaml file,
-    which is generated by the createWeblateFile function. It then updates the specified
-    language's translation in either the inputClientFile (en_client.str) or inputPregameFile (en_pregame.str).
-
-    Args:
-        inputYaml (str): The filename of the YAML file generated by createWeblateFile.
-        inputClientFile (str): The filename of the client or pregame file to update.
-        langValue (str): The language value used as the key for the specified language in the YAML file.
-
-    Notes:
-        This function accesses the translated text from the YAML file, and for each constant entry in
-        the inputClientFile, updates the translation with the corresponding entry from the YAML file.
-        The updated translations are then saved to an '_updated.yaml' file.
-
-    Example:
-        Given 'translations.yaml':
-        ```
-        SI_MY_CONSTANT:
-          english: "My Constant Text"
-          turkish: "Benim Sabit Metnim"
-        SI_CONSTANT:
-          english: "Some Constant Text"
-          turkish: "Bazı Sabit Metin"
-        ```
-
-        Calling `importClientTranslations('translations.yaml', 'en_client.str', 'turkish')` will update the
-        'turkish' translation in 'en_client.str' and create an 'translations_updated.yaml' file:
-        ```
-        SI_MY_CONSTANT:
-          english: "My Constant Text"
-          turkish: "Benim Sabit Metnim"
-        SI_CONSTANT:
-          english: "Some Constant Text"
-          turkish: "Bazı Sabit Metin"
-        Updated translations saved to translations_updated.yaml.
-        ```
-
-    """
-    translations = {}
-
-    # Read the translations from the YAML file
-    yaml = ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    with open(inputYaml, 'r', encoding="utf8") as yaml_file:
-        yaml_data = yaml.load(yaml_file)
-
-    # Access the YAML items
-    for conIndex, conText in yaml_data.items():
-        translations[conIndex] = {
-            'english': conText['english'],
-            langValue: conText[langValue],  # Use langValue as the key for the specified language
-        }
-
-    # Update translations from the inputClientFile
-    with open(inputClientFile, 'r', encoding="utf8") as textIns:
-        for line in textIns:
-            maEmptyString = reEmptyString.match(line)
-            maClientUntaged = reClientUntaged.match(line)
-            if maEmptyString:
-                conIndex = maEmptyString.group(1)
-                conText = ''
-                translations[conIndex][langValue] = conText
-            elif maClientUntaged:
-                conIndex = maClientUntaged.group(1)  # Key (conIndex)
-                conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
-                if conIndex in translations and conText != translations[conIndex]['english']:
-                    translations[conIndex][langValue] = conText  # Update the specified language
-
-    # Generate the updated YAML-like output with double-quoted scalars and preserved formatting
-    output_filename = os.path.splitext(inputYaml)[0] + "_updated.yaml"
-    with open(output_filename, 'w', encoding="utf8") as updatedFile:
-        for conIndex, values in translations.items():
-            escaped_english_text = escape_special_characters(values['english'])
-            escaped_lang_text = escape_special_characters(values[langValue])  # Use langValue here
-            yaml_text = (
-                "{}:\n  english: \"{}\"\n  {}: \"{}\"\n".format(
-                    conIndex, escaped_english_text, langValue, escaped_lang_text
-                )
-            )
-            updatedFile.write(yaml_text)
-
-    print("Updated translations saved to {}.".format(output_filename))
+    print("Done. Extracted entries from section {} to {}".format(section_id, output_name))
 
 
 def processEosuiTextFile(filename, text_dict):
@@ -1105,38 +1050,336 @@ def processEosuiTextFile(filename, text_dict):
 
 
 @mainFunction
-def mergeCurrentEosuiText(translatedFilename, unTranslatedFilename):
-    """Merge translated and untranslated ESOUI text (en_client.str or en_pregame.str)
-    for current live server files.
+def combineClientFiles(client_filename, pregame_filename):
+    """
+    Combine content from en_client.str and en_pregame.str files.
+
+    This function reads the content of en_client.str and en_pregame.str files, extracts
+    constant entries that match the pattern defined by reClientUntaged or reEmptyString,
+    and saves the combined information into an 'output.txt' file. If a constant exists
+    in both files, only one entry will be written to eliminate duplication.
 
     Args:
-        translatedFilename (str): The filename of the translated ESOUI text file (en_client.str or en_pregame.str).
-        unTranslatedFilename (str): The filename of the untranslated ESOUI text file (en_client.str or en_pregame.str).
+        client_filename (str): The filename of the en_client.str file.
+        pregame_filename (str): The filename of the en_pregame.str file.
 
-    This function merges the translated ESOUI text from the specified translatedFilename with the
-    untranslated ESOUI text from the unTranslatedFilename. It creates an 'output.txt' file containing
-    merged entries, prioritizing translated text over untranslated text if available.
+    Notes:
+        This function uses preserve_escaped_sequences and restore_escaped_sequences
+        to ensure backslashes and quotes are correctly written to output format.
 
-    Note:
-        This function was replaced by the `diffEsouiText` function and uses reClientUntaged to identify
-        constant entries and empty lines. It generates merged entries based on the translated and
-        untranslated dictionaries.
-
+    Example:
+        Given en_client.str:
+            [SI_MY_CONSTANT] = "My Constant Text"
+            [SI_CONSTANT] = "Some Constant Text"
+        And en_pregame.str:
+            [SI_CONSTANT] = "Some Constant Text"
+            [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
+        Will produce output.txt:
+            [SI_MY_CONSTANT] = "My Constant Text"
+            [SI_CONSTANT] = "Some Constant Text"
+            [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
     """
 
-    # Read and process translated ESOUI text
-    processEosuiTextFile(translatedFilename, textTranslatedDict)
+    textClientDict = {}
+    textPregameDict = {}
 
-    # Read and process untranslated ESOUI text
-    processEosuiTextFile(unTranslatedFilename, textUntranslatedDict)
+    # Load both files using shared helper
+    processEosuiTextFile(client_filename, textClientDict)
+    processEosuiTextFile(pregame_filename, textPregameDict)
 
-    # Write merged output
+    # Merge into single output dictionary
+    mergedDict = {}
+    mergedDict.update(textClientDict)
+    mergedDict.update(textPregameDict)  # pregame entries will not overwrite existing ones
+
     with open("output.txt", 'w', encoding="utf8") as out:
-        for key in textUntranslatedDict:
-            conIndex = key
-            conText = textTranslatedDict.get(conIndex, textUntranslatedDict[key])
-            lineOut = '[{}] = "{}"\n'.format(conIndex, conText)
+        for conIndex, conText in mergedDict.items():
+            if conText == "":
+                lineOut = '[{}] = ""\n'.format(conIndex)
+            else:
+                escaped = preserve_escaped_sequences(conText)
+                formatted = '[{}] = "{}"\n'.format(conIndex, escaped)
+                lineOut = restore_escaped_sequences(formatted)
             out.write(lineOut)
+
+
+@mainFunction
+def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBaseEnglish=False, inputEnglishFile=None):
+    """
+    Converts an ESO .str file into a .po file, using English as fallback if necessary.
+
+    Args:
+        inputFile (str): Path to the translated or base English .str file.
+        lang (str): Language code for the PO file metadata.
+        outputFile (str): Output PO file name.
+        isBaseEnglish (bool): If True, produces empty msgstr entries.
+        inputEnglishFile (str, optional): Path to English .str file to use for msgid fallback (required if isBaseEnglish=False).
+    """
+    if not isBaseEnglish and inputEnglishFile is None:
+        print("Error: inputEnglishFile is required if isBaseEnglish is False.")
+        return
+
+    # Load English strings for msgid reference
+    english_map = {}
+    if inputEnglishFile:
+        with open(inputEnglishFile, 'r', encoding='utf-8') as f_en:
+            for line in f_en:
+                m = reClientUntaged.match(line)
+                if m:
+                    k, v = m.group(1), m.group(2)
+                    english_map[k] = bytes(v, 'utf-8').decode('unicode_escape')
+
+    # Load current language strings (either English or translated)
+    translated_map = {}
+    with open(inputFile, 'r', encoding='utf-8') as f_trans:
+        for line in f_trans:
+            if reFontTag.match(line):
+                continue
+            m = reClientUntaged.match(line)
+            if m:
+                k, v = m.group(1), m.group(2)
+                translated_map[k] = bytes(v, 'utf-8').decode('unicode_escape')
+
+    # Create PO file
+    po = polib.POFile()
+    po.metadata = {
+        'Content-Type': 'text/plain; charset=UTF-8',
+        'Language': lang,
+    }
+
+    keys = set(english_map if not isBaseEnglish else translated_map)
+    for key in sorted(keys):
+        msgid = english_map.get(key, translated_map.get(key, ""))
+        msgstr = "" if isBaseEnglish else translated_map.get(key, msgid)
+
+        entry = polib.POEntry(
+            msgctxt=key,
+            msgid=msgid,
+            msgstr=msgstr,
+        )
+        po.append(entry)
+
+    po.save(outputFile)
+    print("Done. Created .po file: {}".format(outputFile))
+
+
+@mainFunction
+def createWeblateFile(inputFile, lang="en", outputFile=None, component=None):
+    """
+    Generate a YAML file for Weblate translation.
+
+    This function reads a text file containing ESO string definitions and generates
+    a single YAML file structured for use with Weblate.
+
+    Args:
+        inputFile (str): The filename of the text file containing ESO strings.
+        lang (str): Language code used for the output file name (e.g., "en", "tr"). Default is "en".
+        outputFile (str, optional): The filename of the output YAML file. If None, defaults to <basename>.<lang>.yaml.
+        component (str, optional): Optional top-level key (e.g., "client"). If None, the output will be flat.
+
+    Notes:
+        This function extracts constant entries using the reClientUntaged pattern from the input file,
+        builds a dictionary of translations, and writes them in YAML format suitable for Weblate.
+
+    Example:
+        Given 'output.txt':
+        ```
+        [SI_MY_CONSTANT] = "My Constant Text"
+        [SI_CONSTANT] = "Some Constant Text"
+        ```
+
+        Calling `createWeblateFile('output.txt', lang='tr', component='client')` will produce:
+        - 'output.tr.yaml':
+          ```
+          client:
+            SI_MY_CONSTANT: "My Constant Text"
+            SI_CONSTANT: "Some Constant Text"
+          ```
+    """
+    if outputFile is None:
+        base = os.path.splitext(os.path.basename(inputFile))[0]
+        outputFile = "{}.{}.yaml".format(base, lang)
+
+    try:
+        with open(inputFile, 'r', encoding="utf8") as textIns:
+            translations = {}
+            for line in textIns:
+                maEmptyString = reEmptyString.match(line)
+                maClientUntaged = reClientUntaged.match(line)
+                if maEmptyString:
+                    conIndex = maEmptyString.group(1)
+                    conText = ''
+                    translations[conIndex] = DoubleQuotedScalarString(conText)
+                elif maClientUntaged:
+                    conIndex = maClientUntaged.group(1)
+                    conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
+                    translations[conIndex] = DoubleQuotedScalarString(conText)
+    except FileNotFoundError:
+        print("{} not found. Aborting.".format(inputFile))
+        return
+
+    if not translations:
+        print("No translations found in {}. Aborting.".format(inputFile))
+        return
+
+    yaml = ruamel.yaml.YAML()
+    yaml.preserve_quotes = True
+    yaml.width = float("inf")
+
+    with open(outputFile, 'w', encoding="utf8") as weblate_file:
+        if component:
+            yaml.dump({component: translations}, weblate_file)
+        else:
+            yaml.dump(translations, weblate_file)
+
+    print("Generated Weblate file: {}".format(outputFile))
+
+
+@mainFunction
+def importClientTranslations(inputYaml, inputEnglishFile, inputLocalizedFile, langValue):
+    """
+    Import translated text from localized and English client files and generate an updated YAML.
+
+    This function reads untranslated text from the specified inputEnglishFile (e.g., en_client.str)
+    and translated text from the inputLocalizedFile (e.g., tr_client.str or ua_client.str). If an existing
+    YAML file is present, it is used to seed the initial data. Otherwise, a fresh YAML file is generated.
+
+    Args:
+        inputYaml (str): The filename of the YAML file to update. If the file does not exist, it will be created.
+        inputEnglishFile (str): The filename of the English untranslated client or pregame file.
+        inputLocalizedFile (str): The filename of the localized client or pregame file to extract translations from.
+        langValue (str): The language name to use as the field name in the YAML (e.g., "turkish").
+
+    Notes:
+        This function ensures that only strings currently present in the English file are included in the output.
+        If a key in the English file has no corresponding translation in the localized file, it will be output
+        with an empty string. Obsolete entries (ones no longer in the English file) are discarded.
+
+    Example:
+        Calling `importClientTranslations('translations.yaml', 'en_client.str', 'tr_client.str', 'turkish')` will produce:
+        ```
+        SI_MY_CONSTANT:
+          english: "My Constant Text"
+          turkish: "Benim Sabit Metnim"
+        SI_NEW_CONSTANT:
+          english: "New String"
+          turkish: ""
+        ```
+        Updated translations saved to translations_updated.yaml.
+    """
+    translations = {}
+
+    yaml = ruamel.yaml.YAML()
+    yaml.preserve_quotes = True
+    yaml.width = float("inf")
+
+    # Load from inputYaml if it exists
+    if os.path.isfile(inputYaml):
+        with open(inputYaml, 'r', encoding="utf8") as yaml_file:
+            yaml_data = yaml.load(yaml_file) or {}
+        for conIndex, conText in yaml_data.items():
+            translations[conIndex] = {
+                'english': conText.get('english', ''),
+                langValue: conText.get(langValue, ''),
+            }
+
+    # Read English .str file and populate or update base entries
+    with open(inputEnglishFile, 'r', encoding="utf8") as en_file:
+        for line in en_file:
+            ma = reClientUntaged.match(line)
+            if ma:
+                key = ma.group(1)
+                value = ma.group(2)
+                if key not in translations:
+                    translations[key] = {}
+                translations[key]['english'] = value
+                if langValue not in translations[key]:
+                    translations[key][langValue] = ""
+
+    # Read localized .str file and populate only existing keys
+    with open(inputLocalizedFile, 'r', encoding="utf8") as loc_file:
+        for line in loc_file:
+            ma = reClientUntaged.match(line)
+            if ma:
+                key = ma.group(1)
+                value = ma.group(2)
+                if key in translations:
+                    if value != translations[key].get('english', ''):
+                        translations[key][langValue] = value
+
+    # Restrict output to keys that still exist in the English file
+    filtered_translations = {
+        k: v for k, v in translations.items() if 'english' in v
+    }
+
+    # Wrap values with DoubleQuotedScalarString
+    for key, fields in filtered_translations.items():
+        fields['english'] = DoubleQuotedScalarString(fields['english'])
+        fields[langValue] = DoubleQuotedScalarString(fields[langValue])
+
+    # Write updated YAML output
+    output_filename = os.path.splitext(inputYaml)[0] + "_updated.yaml"
+    with open(output_filename, 'w', encoding="utf8") as out_file:
+        yaml.dump(filtered_translations, out_file)
+
+    print("Updated translations saved to {}.".format(output_filename))
+
+
+@mainFunction
+def createWeblateMonolingualYamls(input_en, input_translated=None, langTag=None, section_name=None):
+    """
+    Generate two monolingual Weblate-compatible YAML files named after section_name.
+
+    Args:
+        input_en (str): Path to the English source file (Lua-style).
+        input_translated (str, optional): Path to the translated file (Lua-style). If None, translation falls back to English.
+        langTag (str): Language code for the translation (e.g., 'kr', 'tr', 'uk').
+        section_name (str): YAML top-level key and file prefix (e.g., 'client', 'pregame').
+    """
+    if not langTag:
+        print("Missing langTag (e.g., 'kr', 'tr'). Aborting.")
+        return
+    if not section_name:
+        print("Missing section_name (e.g., 'client', 'pregame'). Aborting.")
+        return
+
+    def parse_lua_file(path):
+        entries = {}
+        for line in open(path, encoding="utf-8"):
+            ma = reClientUntaged.match(line)
+            if ma:
+                key, val = ma.group(1), ma.group(2)
+                entries[key] = val
+        return entries
+
+    en_data = parse_lua_file(input_en)
+    tr_data = parse_lua_file(input_translated) if input_translated else {}
+
+    out_en_file = "{}.en.yaml".format(section_name)
+    out_tr_file = "{}.{}.yaml".format(section_name, langTag)
+
+    yaml = ruamel.yaml.YAML()
+    yaml.preserve_quotes = True
+    yaml.width = float("inf")
+
+    def write_yaml(filepath, dictionary):
+        data = {section_name: {}}
+        for key, val in sorted(dictionary.items()):
+            data[section_name][key] = DoubleQuotedScalarString(val)
+        with open(filepath, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+
+    write_yaml(out_en_file, en_data)
+
+    merged_tr_data = {
+        key: tr_data.get(key, "") or en_data.get(key, "")
+        for key in en_data
+    }
+    write_yaml(out_tr_file, merged_tr_data)
+
+    print("Wrote Weblate YAML files:")
+    print("  - {}".format(out_en_file))
+    print("  - {}".format(out_tr_file))
 
 
 @mainFunction
@@ -1153,9 +1396,6 @@ def processTranslationFiles(inputYaml, clientStrings, pregameStrings, languageKe
         clientStrings (str): The filename of the client strings file (e.g., tr_client.str).
         pregameStrings (str): The filename of the pregame strings file (e.g., tr_pregame.str).
         languageKey (str): The key corresponding to the desired language in the translations.
-
-    Returns:
-        None
     """
     if not isinstance(languageKey, str):
         print("languageKey must be a string. Aborting.")
@@ -1167,26 +1407,104 @@ def processTranslationFiles(inputYaml, clientStrings, pregameStrings, languageKe
     processEosuiTextFile(pregameStrings, pregameStringsDict)
 
     translations = {}
+    yaml = ruamel.yaml.YAML()
+    yaml.preserve_quotes = True
+    yaml.width = float("inf")
+
     try:
         with open(inputYaml, 'r', encoding='utf8') as yaml_file:
-            translations = ruamel.yaml.safe_load(yaml_file)
+            translations = yaml.load(yaml_file)
     except FileNotFoundError:
         print("{} not found. Aborting.".format(inputYaml))
         return
 
-    with open('tr_client.output', 'w', encoding='utf8') as client_output_file:
+    client_output_path = "client.{}.output.txt".format(languageKey)
+    pregame_output_path = "pregame.{}.output.txt".format(languageKey)
+
+    with open(client_output_path, 'w', encoding='utf8') as client_output_file:
         for key, value in clientStringsDict.items():
             output = value
             if key in translations and languageKey in translations[key]:
                 output = translations[key][languageKey]
-            client_output_file.write('[{}] = "{}"\n'.format(key, output))
+            escaped = preserve_escaped_sequences(output)
+            formatted = '[{}] = "{}"\n'.format(key, escaped)
+            restored = restore_escaped_sequences(formatted)
+            client_output_file.write(restored)
 
-    with open('tr_pregame.output', 'w', encoding='utf8') as pregame_output_file:
+    with open(pregame_output_path, 'w', encoding='utf8') as pregame_output_file:
         for key, value in pregameStringsDict.items():
             output = value
             if key in translations and languageKey in translations[key]:
                 output = translations[key][languageKey]
-            pregame_output_file.write('[{}] = "{}"\n'.format(key, output))
+            escaped = preserve_escaped_sequences(output)
+            formatted = '[{}] = "{}"\n'.format(key, escaped)
+            restored = restore_escaped_sequences(formatted)
+            pregame_output_file.write(restored)
+
+    print("Wrote client output to: {}".format(client_output_path))
+    print("Wrote pregame output to: {}".format(pregame_output_path))
+
+
+@mainFunction
+def convertLangToYaml(input_txt, output_yaml=None):
+    """
+    Convert ESO lang-formatted text ({{sectionId-sectionIndex-stringIndex:}}Text) into a Weblate-compatible YAML file.
+
+    Args:
+        input_txt (str): Input filename like '70901198.txt'.
+        output_yaml (str, optional): Output YAML filename. If not provided, derived from input filename.
+
+    Writes:
+        A .yaml file where each entry uses the key from the lang index and a quoted string.
+    """
+    if output_yaml is None:
+        base = os.path.splitext(os.path.basename(input_txt))[0]
+        output_yaml = "{}_weblate.yaml".format(base)
+
+    with open(input_txt, 'r', encoding='utf8') as infile, open(output_yaml, 'w', encoding='utf8') as outfile:
+        for line in infile:
+            match = reLangIndex.match(line.rstrip())
+            if match:
+                key = match.group(1)
+                text = match.group(2).replace('"', '\\"')
+                outfile.write('{}: "{}"\n'.format(key, text))
+
+    print("YAML output written to {}".format(output_yaml))
+
+
+@mainFunction
+def convertLangToPo(input_txt, output_po=None):
+    """
+    Convert ESO lang-formatted text ({{sectionId-sectionIndex-stringIndex:}}Text) into a Weblate-compatible PO file.
+
+    Args:
+        input_txt (str): Input filename like '70901198.txt'.
+        output_po (str, optional): Output PO filename. If not provided, derived from input filename.
+
+    Writes:
+        A .po file with msgctxt as the lang key and empty msgstr values for translation.
+    """
+    po = polib.POFile()
+
+    if output_po is None:
+        base = os.path.splitext(os.path.basename(input_txt))[0]
+        output_po = "{}_weblate.po".format(base)
+
+    with open(input_txt, 'r', encoding='utf8') as infile:
+        for line in infile:
+            match = reLangIndex.match(line.rstrip())
+            if match:
+                key = match.group(1)
+                text = match.group(2)
+                entry = polib.POEntry(
+                    msgctxt=key,
+                    msgid=text,
+                    msgstr=""
+                )
+                po.append(entry)
+
+    po.save(output_po)
+    print("PO output written to {}".format(output_po))
 
 
 def readTaggedLangFile(taggedFile, targetDict):
@@ -1254,66 +1572,52 @@ def calculate_similarity_ratio(text1, text2):
 
 
 @mainFunction
-def mergeCurrentLangText(translatedFilename, unTranslatedFilename):
-    """Untested: Merge translated and untranslated language text for current live server files.
-
-    Args:
-        translatedFilename (str): The filename of the translated language text file.
-        unTranslatedFilename (str): The filename of the untranslated language text file.
-
-    This function merges the translated language text from the specified translatedFilename with the
-    untranslated language text from the unTranslatedFilename. It creates an 'output.txt' file containing
-    merged entries, prioritizing translated text over untranslated text if available.
-
-    Args:
-        translatedFilename (str): The filename of the translated language text file.
-        unTranslatedFilename (str): The filename of the untranslated language text file.
-
-    This function reads the translated and untranslated language text files, extracts constant indexes
-    and text using reLangIndex, and then generates merged entries based on the presence of translated
-    text.
-
-    Note:
-        This function assumes that the input files follow the format of indexed language text entries
-        like "{{{3427285-5-36:}}}TEXT".
-
-    Note:
-        This function is untested and not currently used.
-
+def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile="output.txt"):
     """
+    Import a translated section into a full language file by matching tagged keys.
 
-    # Get translated text entries
-    with open(translatedFilename, 'r', encoding="utf8") as textIns:
-        for line in textIns:
-            maLangIndex = reLangIndex.match(line)
-            if maLangIndex:
-                conIndex, conText = maLangIndex.groups()
-                textTranslatedDict[conIndex] = conText
+    This function reads:
+      - A **translated section** file, typically created using `extractSectionEntries()`, which contains a subset
+        of translated entries in the format `{{sectionId-sectionIndex-stringIndex:}}TranslatedText`
+      - A **full language file** that contains the complete set of entries for a language (typically untranslated).
 
-    # Get untranslated text entries
-    with open(unTranslatedFilename, 'r', encoding="utf8") as textIns:
-        for line in textIns:
-            maLangIndex = reLangIndex.match(line)
-            if maLangIndex:
-                conIndex, conText = maLangIndex.groups()
-                textUntranslatedDict[conIndex] = conText
+    It then replaces any matching entries in the full language file with the corresponding translated entries,
+    based on exact key matches. Only lines starting with a valid key tag will be considered.
 
-    # Write merged output
-    with open("output.txt", 'w', encoding="utf8") as out:
-        for key in textUntranslatedDict:
-            conText = None
-            if textTranslatedDict.get(key) is None:
-                conText = textUntranslatedDict[key]
-                lineOut = '{{{{{}:}}}}{}\n'.format(key, conText.rstrip())
-                out.write(lineOut)
-                continue
-            if textTranslatedDict.get(key) is not None:
-                if isTranslatedText(textTranslatedDict.get(key)):
-                    conText = textTranslatedDict[key]
-            if not conText:
-                conText = textUntranslatedDict[key]
-            lineOut = '{{{{{}:}}}}{}\n'.format(key, conText)
-            out.write(lineOut)
+    The output is written to `output.txt` (or a specified output file), preserving the untranslated entries and
+    merging in any provided translations from the section file.
+
+    Args:
+        translatedSectionFile (str): The filename of the translated section file, e.g. `lorebooks_uk.txt`, containing tagged entries.
+        fullLangFile (str): The full language file to update, e.g. `en.lang_tag.txt`, containing all entries.
+        outputLangFile (str, optional): The filename to write the merged output to. Defaults to `"output.txt"`.
+
+    Notes:
+        - This function expects both files to use tagged entry formats like `{{211640654-0-5066:}}Some text`
+        - It performs exact key matches using the part inside the double curly braces.
+        - Unmatched lines are written through unchanged.
+    """
+    textTranslatedDict.clear()
+
+    # Read the translated section file into the global dict
+    with open(sectionLangFile, 'r', encoding="utf8") as sec:
+        for line in sec:
+            m = reLangIndex.match(line)
+            if m:
+                key, value = m.groups()
+                textTranslatedDict[key] = value.rstrip("\n")
+
+    # Read the full lang file and replace lines with translated ones
+    with open(fullLangFile, 'r', encoding="utf8") as full, open(outputLangFile, 'w', encoding="utf8") as out:
+        for line in full:
+            m = reLangIndex.match(line)
+            if m:
+                key, _ = m.groups()
+                if key in textTranslatedDict:
+                    line = "{{{{{}:}}}}{}\n".format(key, textTranslatedDict[key])
+            out.write(line)
+
+    print("Merged translations from {} into {} → {}".format(sectionLangFile, fullLangFile, outputLangFile))
 
 
 @mainFunction
@@ -1457,8 +1761,11 @@ def diffEsouiText(translatedFilename, liveFilename, ptsFilename):
 
             if hasTranslation:
                 outputText = translatedText
-            lineOut = '[{}] = "{}"\n'.format(key, outputText)
-            out.write(lineOut)
+
+            escaped = preserve_escaped_sequences(outputText)
+            formatted = '[{}] = "{}"\n'.format(key, escaped)
+            restored = restore_escaped_sequences(formatted)
+            out.write(restored)
 
 
 @mainFunction
@@ -1740,7 +2047,7 @@ def test_add_tags():
         elif maClientUntaged:
             conIndex = maClientUntaged.group(1)  # Key (conIndex)
             conText = maClientUntaged.group(2)  # Text content
-            conText = escape_special_characters(conText)
+            conText = escape_lua_string(conText)
 
             if conText:
                 if conIndex in no_prefix_indexes:
@@ -1843,7 +2150,8 @@ def detect_encoding_for_each_char(inputFile):
 
             result = chardet.detect(char)
             detected_encoding = result['encoding']
-            print("Character: {}, Detected Encoding: {}".format(char.decode(detected_encoding, 'replace'), detected_encoding))
+            print("Character: {}, Detected Encoding: {}".format(char.decode(detected_encoding, 'replace'),
+                                                                detected_encoding))
 
 
 @mainFunction
