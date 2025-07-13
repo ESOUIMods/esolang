@@ -1,6 +1,52 @@
+# -*- coding: utf-8 -*-
+import argparse
+import sys
+import os
+import inspect
+import re
+import struct
+import codecs
+import chardet
+from difflib import SequenceMatcher
+import ruamel.yaml
+from ruamel.yaml.scalarstring import PreservedScalarString
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+import section_constants as section
+import polib
+
 textUntranslatedLiveDict = {}
 textUntranslatedPTSDict = {}
 textTranslatedDict = {}
+
+reColorTag = re.compile(r'\|c[0-9a-zA-Z]{1,6}|\|r')
+
+
+def isTranslatedText(text):
+    """
+    Determines whether the input appears to be translated text.
+
+    - If text is bytes, it is decoded to UTF-8 first.
+    - Checks for non-ASCII characters or distinctive Latin letters used in ESO translations.
+    """
+    if not text:
+        return False
+
+    if isinstance(text, (bytes, bytearray)):
+        try:
+            text = text.decode("utf-8", errors="ignore")
+        except Exception:
+            return False
+
+    # Now guaranteed to be a str from here onward
+    if any(ord(char) > 127 for char in text):
+        return True
+
+    latin_translation_chars = set("ñáéíóúüàâæçèêëîïôœùûÿäößãõêîìíòùąćęłńśźżğıİş")
+    if any(char in latin_translation_chars for char in text.lower()):
+        return True
+
+    return False
+
 
 def readTaggedLangFile(taggedFile, targetDict):
     reLangConstantTag = re.compile(r'^\{\{(.+?):\}\}(.+?)$')
@@ -12,6 +58,7 @@ def readTaggedLangFile(taggedFile, targetDict):
                 conIndex = maConstantText.group(1)
                 conText = maConstantText.group(2)
                 targetDict[conIndex] = conText
+
 
 def cleanText(line):
     if line is None:
@@ -28,7 +75,7 @@ def cleanText(line):
 
     return line
 
-@mainFunction
+
 def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslatedPTSFilename):
     reColorTag = re.compile(r'\|c[0-9a-zA-Z]{1,6}|\|r')
     reControlChar = re.compile(r'\^f|\^n|\^F|\^N|\^p|\^P')
@@ -115,21 +162,21 @@ def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslat
                     verifyOut.write('{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
                     verifyOut.write(lineOut)
                 out.write(lineOut)
-                
-Here's an example of how you could use a list comprehension for generating the keys that need verification:
 
+
+# Here's an example of how you could use a list comprehension for generating the keys that need verification:
 keys_to_verify = [
-    key for key in textUntranslatedPTSDict 
+    key for key in textUntranslatedPTSDict
     if (
-        (translatedTextStripped := cleanText(textTranslatedDict.get(key))) and
-        (liveTextStripped := cleanText(textUntranslatedLiveDict.get(key))) and
-        (ptsTextStripped := cleanText(textUntranslatedPTSDict.get(key))) and
-        translatedTextStripped != ptsTextStripped and
-        not (
-            (translatedAndPtsGreaterThanThreshold := isTranslatedText(translatedTextStripped)) and
-            (subTranslatedText := reColorTag.sub('', translatedTextStripped)) and
-            (subPtsText := reColorTag.sub('', ptsTextStripped)) and
-            SequenceMatcher(None, subTranslatedText, subPtsText).ratio() > 0.6
-        )
+            (translatedTextStripped := cleanText(textTranslatedDict.get(key))) and
+            (liveTextStripped := cleanText(textUntranslatedLiveDict.get(key))) and
+            (ptsTextStripped := cleanText(textUntranslatedPTSDict.get(key))) and
+            translatedTextStripped != ptsTextStripped and
+            not (
+                    (translatedAndPtsGreaterThanThreshold := isTranslatedText(translatedTextStripped)) and
+                    (subTranslatedText := reColorTag.sub('', translatedTextStripped)) and
+                    (subPtsText := reColorTag.sub('', ptsTextStripped)) and
+                    SequenceMatcher(None, subTranslatedText, subPtsText).ratio() > 0.6
+            )
     )
 ]
