@@ -10,7 +10,7 @@ section_info = {
     'section_unknown_9': {'sectionId': 6658117, 'sectionName': 'section_unknown_9'},
     'quest_objectives': {'sectionId': 7949764, 'sectionName': 'quest_objectives'},
     'section_unknown_11': {'sectionId': 8158238, 'sectionName': 'section_unknown_11'},
-    'npc_names_928': {'sectionId': 8290981, 'sectionName': 'npc_names_928'},
+    'npc_names_829': {'sectionId': 8290981, 'sectionName': 'npc_names_829'},
     'section_unknown_13': {'sectionId': 8379076, 'sectionName': 'section_unknown_13'},
     'section_unknown_14': {'sectionId': 8637315, 'sectionName': 'section_unknown_14'},
     'section_unknown_15': {'sectionId': 9019316, 'sectionName': 'section_unknown_15'},

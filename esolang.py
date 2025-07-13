@@ -226,17 +226,88 @@ def restore_escaped_sequences(text):
     )
 
 
-def isTranslatedText(line):
-    if line is None:
+def readExtendedChar(file):
+    """
+    Reads a UTF-8 character from file, returning raw bytes and byte count.
+
+    Args:
+        file (file object): An open binary file (e.g., 'rb').
+
+    Returns:
+        tuple[bytes, int]: (char_bytes, total_bytes_read)
+    """
+    first_byte = file.read(1)
+    if not first_byte:
+        return b'', 0  # EOF
+
+    value = int.from_bytes(first_byte, "big")
+
+    if value <= 0x74:
+        shift = 1
+    elif 0xC0 <= value <= 0xDF:
+        shift = 2
+    elif 0xE0 <= value <= 0xEF:
+        shift = 3
+    elif 0xF0 <= value <= 0xF7:
+        shift = 4
+    else:
+        shift = 1  # fallback for safety
+
+    remaining = file.read(shift - 1) if shift > 1 else b''
+    char_bytes = b''.join([first_byte, remaining])
+    return char_bytes, shift
+
+
+def isTranslatedText(text):
+    """
+    Determines whether the input appears to be translated text.
+
+    - If text is bytes, it is decoded to UTF-8 first.
+    - Checks for non-ASCII characters or distinctive Latin letters used in ESO translations.
+    """
+    if not text:
         return False
-    return any(ord(char) > 127 for char in line)
+
+    if isinstance(text, (bytes, bytearray)):
+        try:
+            text = text.decode("utf-8", errors="ignore")
+        except Exception:
+            return False
+
+    # Now guaranteed to be a str from here onward
+    if any(ord(char) > 127 for char in text):
+        return True
+
+    latin_translation_chars = set("ñáéíóúüàâæçèêëîïôœùûÿäößãõêîìíòùąćęłńśźżğıİş")
+    if any(char in latin_translation_chars for char in text.lower()):
+        return True
+
+    return False
 
 
 # Read and write binary structs
+def readUByte(file): return struct.unpack('>B', file.read(1))[0]
+
+
+def readUInt16(file): return struct.unpack('>H', file.read(2))[0]
+
+
 def readUInt32(file): return struct.unpack('>I', file.read(4))[0]
 
 
+def readUInt64(file): return struct.unpack('>Q', file.read(8))[0]
+
+
+def writeUByte(file, value): file.write(struct.pack('>B', value))
+
+
+def writeUInt16(file, value): file.write(struct.pack('>H', value))
+
+
 def writeUInt32(file, value): file.write(struct.pack('>I', value))
+
+
+def writeUInt64(file, value): file.write(struct.pack('>Q', value))
 
 
 # Conversion ------------------------------------------------------------------
@@ -755,40 +826,24 @@ def extract_npc_name_matches(tagged_txt_file, lua_input_file):
 
 
 def readNullStringByChar(offset, start, file):
-    """Reads one byte and any subsequent bytes of a multi byte sequence."""
-    nullChar = False
-    textLine = None
+    """Reads a null-terminated UTF-8 string one char at a time, preserving raw binary bytes."""
     currentPosition = file.tell()
     file.seek(start + offset)
+
+    nullChar = False
+    textLine = b''
+
     while not nullChar:
-        shift = 1
-        char = file.read(shift)
-        value = int.from_bytes(char, "big")
-        next_char = None
-        if value > 0x00 and value <= 0x74:
-            shift = 1
-        elif value >= 0xc0 and value <= 0xdf:
-            shift = 2
-        elif value >= 0xe0 and value <= 0xef:
-            shift = 3
-        elif value >= 0xf0 and value <= 0xf7:
-            shift = 4
-        if shift > 1:
-            next_char = file.read(shift - 1)
-        if next_char:
-            char = b''.join([char, next_char])
+        char, shift = readExtendedChar(file)
         if not char:
-            # eof
-            break
-        if textLine is None:
-            textLine = char
-            continue
-        if textLine is not None and char != b'\x00':
-            textLine = b''.join([textLine, char])
-        # if textLine is not None and char != b'\x00' and char == b'\x0A':
-        #     textLine = b''.join([textLine, b'\x5C\x6E'])
-        if textLine is not None and char == b'\x00':
+            break  # EOF
+
+        if char == b'\x00':
             nullChar = True
+            break
+
+        textLine = b''.join([textLine, char])
+
     file.seek(currentPosition)
     return textLine
 
@@ -911,20 +966,29 @@ def writeLangFile(languageFileName, fileIndexes, fileStrings):
 
 
 @mainFunction
-def readCurrentLangFile(currentLanguageFile):
-    """Reads a language file, stores index and string data, and writes to an output file.
+def rebuildLangFileWithPointers(inputLangFile):
+    """
+    Reads a language file, identifies duplicate strings, and ensures that repeated strings
+    share the same offset in the output. This rebuilds the language file so that identical
+    strings are stored only once.
 
     Args:
-        currentLanguageFile (str): The name of the current language file to read.
+        inputLangFile (str): The name of the input .lang file (e.g. 'en.lang', 'ko.lang').
 
-    Note:
-        This function reads the provided language file, extracts index and string information,
-        updates string offsets if needed, and writes the data back to an output file named 'output.lang'.
+    Output:
+        Writes one file:
+        - '{prefix}_output_{suffix}.lang': the optimized language file
     """
+    basename = os.path.basename(inputLangFile)
+    prefix = basename.split("_", 1)[0]
+    suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+    output_filename = "{}_output_{}.lang".format(prefix, suffix)
 
-    currentFileIndexes, currentFileStrings = readLangFile(currentLanguageFile)
+    currentFileIndexes, currentFileStrings = readLangFile(inputLangFile)
     print(currentFileStrings['stringCount'])
-    writeLangFile('output.lang', currentFileIndexes, currentFileStrings)
+    writeLangFile(output_filename, currentFileIndexes, currentFileStrings)
+
+    print("Optimized file written to: {}".format(output_filename))
 
 
 def processSectionIDs(outputFileName, currentFileIndexes):
@@ -1621,21 +1685,21 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile=
 
 
 @mainFunction
-def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslatedPTSFilename):
+def compareTaggedSourceForTranslation(translated_tagged_text, previous_tagged_english_text, current_tagged_english_text):
     """
     Compare translations between different versions of language files.
 
     This function compares translations between different versions of language files and writes the results to output files.
 
     Args:
-        translatedFilename (str): The filename of the translated language file (e.g., kb.lang.txt).
-        unTranslatedLiveFilename (str): The filename of the previous/live English language file with tags (e.g., en_prv.lang_tag.txt).
-        unTranslatedPTSFilename (str): The filename of the current/PTS English language file with tags (e.g., en_cur.lang_tag.txt).
+        translated_tagged_text (str): The filename of the translated language file (e.g., ko.lang.txt).
+        previous_tagged_english_text (str): The filename of the previous/live English language file with tags (e.g., en_prv.lang_tag.txt).
+        current_tagged_english_text (str): The filename of the current/PTS English language file with tags (e.g., en_cur.lang_tag.txt).
 
     Notes:
-        - `translatedFilename` should be the translated language file, usually for another language.
-        - `unTranslatedLiveFilename` should be the previous/live English language file with tags.
-        - `unTranslatedPTSFilename` should be the current/PTS English language file with tags.
+        - `translated_tagged_text` should be the translated language file, usually for another language.
+        - `previous_tagged_english_text` should be the previous/live English language file with tags.
+        - `current_tagged_english_text` should be the current/PTS English language file with tags.
         - The output is written to "output.txt" and "verify_output.txt" files.
 
     The function performs the following steps:
@@ -1644,34 +1708,35 @@ def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslat
     - Compares the PTS and live texts to determine if translation changes are needed.
     - Writes the output to "output.txt" with potential new translations and to "verify_output.txt" for verification purposes.
     """
-
     # Get Previous Translation ------------------------------------------------------
-    readTaggedLangFile(translatedFilename, textTranslatedDict)
+    readTaggedLangFile(translated_tagged_text, textTranslatedDict)
     print("Processed Translated Text")
     # Get Previous/Live English Text ------------------------------------------------------
-    readTaggedLangFile(unTranslatedLiveFilename, textUntranslatedLiveDict)
+    readTaggedLangFile(previous_tagged_english_text, textUntranslatedLiveDict)
     print("Processed Previous Text")
     # Get Current/PTS English Text ------------------------------------------------------
-    readTaggedLangFile(unTranslatedPTSFilename, textUntranslatedPTSDict)
+    readTaggedLangFile(current_tagged_english_text, textUntranslatedPTSDict)
     print("Processed Current Text")
     # Compare PTS with Live text, write output -----------------------------------------
     print("Begining Comparison")
     with open("output.txt", 'w', encoding="utf8") as out:
         with open("verify_output.txt", 'w', encoding="utf8") as verifyOut:
             for key in textUntranslatedPTSDict:
+                # Retrieve source and translated text entries by ID
                 translatedText = textTranslatedDict.get(key)
                 liveText = textUntranslatedLiveDict.get(key)
                 ptsText = textUntranslatedPTSDict.get(key)
+
+                # Clean tags and formatting from text strings
                 translatedTextStripped = cleanText(translatedText)
                 liveTextStripped = cleanText(liveText)
                 ptsTextStripped = cleanText(ptsText)
-                # -- Assign lineOut to ptsText
+
+                # Initialize default output to current PTS text
                 lineOut = ptsText
                 useTranslatedText = False
-                hasExtendedChars = isTranslatedText(translatedTextStripped)
-                writeOutput = False
-                # ---Determine Change Ratio between Live and Pts---
-                liveAndPtsGreaterThanThreshold = False
+                writeOutput = False  # Flag to determine whether to log to verify_output.txt
+
                 # ---Determine Change Ratio between Translated and Pts ---
                 # translatedAndPtsGreaterThanThreshold = calculate_similarity_ratio(translatedTextStripped, ptsTextStripped)
                 # live deleted, discard live text
@@ -1682,44 +1747,53 @@ def diffIndexedLangText(translatedFilename, unTranslatedLiveFilename, unTranslat
 
                 # hasTranslation is not named well, it means that it is acceptable to use
                 # translated text if it exists
+
+                # Case: The current/PTS English text was removed — skip it entirely
                 if liveTextStripped is not None and ptsTextStripped is None:
                     continue
+
                 if liveTextStripped is not None and ptsTextStripped is not None:
-                    liveAndPtsGreaterThanThreshold = calculate_similarity_ratio(liveTextStripped, ptsTextStripped)
-                    if liveTextStripped == ptsTextStripped or liveAndPtsGreaterThanThreshold:
-                        useTranslatedText = True
-                    if not liveAndPtsGreaterThanThreshold:
-                        useTranslatedText = False
+                    textsAreIdentical = (liveTextStripped == ptsTextStripped)
+
+                    textsAreSimilar = False
+                    if not textsAreIdentical:
+                        textsAreSimilar = calculate_similarity_ratio(liveTextStripped, ptsTextStripped)
+
+                    if textsAreIdentical or textsAreSimilar:
+                        if translatedText is not None and isTranslatedText(translatedTextStripped):
+                            useTranslatedText = True
+                    else:
                         writeOutput = True
+
                 if liveTextStripped is None and ptsTextStripped is not None:
                     useTranslatedText = False
 
-                if useTranslatedText and translatedText is not None:
+                if useTranslatedText:
                     lineOut = translatedText
+
                 lineOut = '{{{{{}:}}}}{}\n'.format(key, lineOut.rstrip())
-                # -- Save questionable comparison to verify
+
                 if writeOutput:
                     if translatedText is not None:
                         verifyOut.write('T{{{{{}:}}}}{}\n'.format(key, translatedText.rstrip()))
-                    verifyOut.write('L{{{{{}:}}}}{}\n'.format(key, liveText.rstrip()))
-                    verifyOut.write('P{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
-                    verifyOut.write('{{{}}}:{{{}}}\n'.format(liveAndPtsGreaterThanThreshold, lineOut))
+                        verifyOut.write('L{{{{{}:}}}}{}\n'.format(key, liveText.rstrip()))
+                        verifyOut.write('P{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
+                        verifyOut.write('{{{}}}:{{{}}}\n'.format(textsAreSimilar, lineOut))
+
                 out.write(lineOut)
 
 
 @mainFunction
-def diffEsouiText(translatedFilename, liveFilename, ptsFilename):
-    """Diff and Merge ESOUI Text Files with Existing Translations.
+def compareStrFilesForTranslation(translated_string_file, previous_english_string_file, current_english_string_file):
+    """Compare ESOUI Text Files with Existing Translations.
 
-    This function reads three input ESOUI text files: translatedFilename, liveFilename, and ptsFilename,
-    and performs a diff and merge operation. The purpose is to update the translated ESOUI text by
-    comparing the live and PTS (Public Test Server) text files and using the existing translations when
-    the text is the same.
+    This function reads three input ESOUI text files: translated_string_file, previous_english_string_file, and current_english_string_file,
+    and compares the live and PTS (Public Test Server) text files to determine whether existing translations can still be used.
 
     Args:
-        translatedFilename (str): The filename of the translated ESOUI text file (en_client.str or en_pregame.str).
-        liveFilename (str): The filename of the live ESOUI text file (kb_client.str or kb_pregame.str).
-        ptsFilename (str): The filename of the PTS (Public Test Server) ESOUI text file (kb_client.str or kb_pregame.str).
+        translated_string_file (str): The filename of the translated ESOUI text file (e.g., ko_client.str or ko_pregame.str).
+        previous_english_string_file (str): The filename of the live ESOUI text file (e.g., en_client.str or en_pregame.str).
+        current_english_string_file (str): The filename of the PTS (Public Test Server) ESOUI text file (e.g., en_client.str or en_pregame.str).
 
     Note:
         This function uses reLangIndex to identify language constant entries and their associated text.
@@ -1727,14 +1801,13 @@ def diffEsouiText(translatedFilename, liveFilename, ptsFilename):
     The function compares the live and PTS text for each constant entry and determines whether to use
     the existing translation or the live/PTS text. The result is saved in an 'output.txt' file containing
     merged entries with translated text if available.
-
     """
     # Read translated text ----------------------------------------------------
-    processEosuiTextFile(translatedFilename, textTranslatedDict)
+    processEosuiTextFile(translated_string_file, textTranslatedDict)
     # Read live text ----------------------------------------------------
-    processEosuiTextFile(liveFilename, textUntranslatedLiveDict)
+    processEosuiTextFile(previous_english_string_file, textUntranslatedLiveDict)
     # Read pts text ----------------------------------------------------
-    processEosuiTextFile(ptsFilename, textUntranslatedPTSDict)
+    processEosuiTextFile(current_english_string_file, textUntranslatedPTSDict)
     # --Write Output ------------------------------------------------------
     with open("output.txt", 'w', encoding="utf8") as out:
         for key in textUntranslatedPTSDict:
