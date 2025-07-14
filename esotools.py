@@ -16,7 +16,7 @@ from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
 import polib
 from icu import Collator
-from icu import Collator, Locale, UCollAttribute, UCollAttributeValue
+from icu import Collator, Locale, UCollAttribute, UCollAttributeValue, UnicodeString, BreakIterator
 
 """
 From powershell 6.1.7600.16385 you may see question marks rather then the Korean or Chinese text on windows 7.
@@ -84,6 +84,25 @@ def main():
             print("Unknown function: {}".format(function_name))
     else:
         print("No command provided.")
+
+
+# Matches the 2-letter language prefix at the start of a filename, such as 'pl_itemnames.dat' or 'en.lang'
+reFilenamePrefix = re.compile(r'^([a-z]{2})[_\.]', re.IGNORECASE)
+
+# Matches lines in the format {{position-itemId-count}}string_text from itemnames .txt files
+reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
+
+# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
+reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
+
+# Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
+reGenderSuffix = re.compile(r'\^[MmFfNn]')
+
+# Matches a language index in the format {{identifier:}}text
+reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
+
+# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
+reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 
 
 # Read and write binary structs
@@ -488,25 +507,116 @@ def find_missing_maps(lua_file, dds_file, strip_ui_map=False, keep_map_num=True,
 
 
 @mainFunction
+def strip_gender_suffix(input_file, output_file="output.txt"):
+    """
+    Reads a text file and removes ^M, ^F, ^m, ^f, ^N, ^n suffixes from all matching lines.
+
+    Args:
+        input_file (str): The source file containing ESO lang-formatted lines.
+        output_file (str): The output file with cleaned names.
+    """
+
+    with open(input_file, 'r', encoding='utf8') as infile, open(output_file, 'w', encoding='utf8') as outfile:
+        for line in infile:
+            cleaned_line = reGenderSuffix.sub('', line)
+            outfile.write(cleaned_line)
+
+    print("Stripped gender suffixes and saved to {}".format(output_file))
+
+
+def readTaggedLangFile(taggedFile, targetDict):
+    with open(taggedFile, 'r', encoding="utf8") as textIns:
+        for line in textIns:
+            maLangIndex = reLangIndex.match(line)
+            if maLangIndex:
+                conIndex = maLangIndex.group(1)
+                conText = maLangIndex.group(2)
+                targetDict[conIndex] = conText
+
+
+@mainFunction
+def extract_npc_name_matches(tagged_txt_file, lua_input_file):
+    """
+    Parses a tagged ESO language file and a Lua file of known NPC names, then writes out two Lua files:
+    one for matched names using stringIndex as keys and one for unmatched ones.
+
+    Args:
+        tagged_txt_file (str): File with lines like {{8290981-0-123:}}Julien Rissiel^M
+        lua_input_file (str): Lua file with [npc_id] = "Name", lines
+    """
+    textUntranslatedLiveDict = {}
+    readTaggedLangFile(tagged_txt_file, textUntranslatedLiveDict)
+
+    # Build a cleaned name -> first stringIndex mapping from tagged lang file
+    name_to_stringIndex = {}
+    for tag, rawname in textUntranslatedLiveDict.items():
+        cleaned_name = reGenderSuffix.sub('', rawname.strip())
+        if cleaned_name not in name_to_stringIndex:
+            parts = tag.split('-')
+            if len(parts) == 3:
+                string_index = int(parts[2])
+                name_to_stringIndex[cleaned_name] = string_index
+
+    matched_output = []
+    unmatched_output = []
+
+    in_table = False
+    with open(lua_input_file, 'r', encoding='utf8') as luain:
+        for line in luain:
+            if 'lib.quest_givers["en"]' in line:
+                in_table = True
+                continue
+            if in_table and '}' in line:
+                break
+
+            match = re.match(r'\s*\[(\d+)\]\s*=\s*"(.+?)",?', line)
+            if match:
+                npc_id = int(match.group(1))
+                name = match.group(2).strip()
+                if name in name_to_stringIndex:
+                    string_index = name_to_stringIndex[name]
+                    matched_output.append('    [{}] = "{}",'.format(string_index, name))
+                else:
+                    unmatched_output.append('    [{}] = "{}",'.format(npc_id, name))
+
+    with open("npc_names_matched.lua", 'w', encoding='utf8') as out:
+        out.write("return {\n")
+        out.write("\n".join(matched_output))
+        out.write("\n}\n")
+
+    with open("npc_names_unmatched.lua", 'w', encoding='utf8') as out:
+        out.write("return {\n")
+        out.write("\n".join(unmatched_output))
+        out.write("\n}\n")
+
+    print("Done. Wrote matched and unmatched NPC name files.")
+
+
+@mainFunction
 def extract_formatted_itemnames(input_file):
     """
     Extracts all null-terminated UTF-8 strings from a formatted item names file (e.g., ua_formatteditemnames.dat)
-    and writes them to output.txt with LF endings.
+    and writes them to <prefix>_output_<suffix>.txt with LF endings.
 
     Args:
         input_file (str): Path to a .dat file such as 'ua_formatteditemnames.dat' or 'en_formatteditemnames.dat'.
 
     Notes:
         This function assumes the file is a raw binary stream of null-terminated UTF-8 strings.
-        It outputs one decoded string per line to output.txt.
+        It outputs one decoded string per line.
     """
+    basename = os.path.basename(input_file)
+    match = reFilenamePrefix.match(basename)
+    prefix = match.group(1) if match else "xx"
+    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]
+    output_filename = "{}_output_{}.txt".format(prefix, suffix)
+
     string_count = 0
-    with open(input_file, 'rb') as f, open("output_formatted_names.txt", 'w', encoding="utf8") as out:
+    with open(input_file, 'rb') as f, open(output_filename, 'w', encoding="utf8") as out:
         buffer = bytearray()
         while True:
             byte = f.read(1)
             if not byte:
-                # EOF
                 if buffer:
                     out.write(buffer.decode("utf-8", errors="replace") + "\n")
                     string_count += 1
@@ -518,7 +628,9 @@ def extract_formatted_itemnames(input_file):
                     buffer.clear()
             else:
                 buffer.extend(byte)
-    print("Done. Extracted {} strings to output.txt.".format(string_count))
+
+    print("Done. Extracted {} strings to {}.".format(string_count, output_filename))
+
 
 
 @mainFunction
@@ -656,84 +768,6 @@ def extract_itemnames_raw_data(input_file, input_itemids_file):
 
 
 @mainFunction
-def extract_itemnames_exclude_matching_english(input_itemnames_file, input_itemids_file, en_itemnames_file, en_itemids_file):
-    """
-    Parses translated itemnames.dat and itemids.dat to output each entry as:
-    {{position-item_id-count}}string_text
-
-    Skips any entry where the item_id exists in the English files AND
-    string_value matches one of the English strings for that item_id.
-    """
-    from collections import defaultdict
-
-    id_dict = parse_itemids_to_dict(input_itemids_file)
-    en_id_dict = parse_itemids_to_dict(en_itemids_file)
-    en_itemnames_dict = parse_itemnames_to_dict(en_itemnames_file)
-
-    # Build reverse lookup: item_id → set of English strings
-    en_strings_by_item_id = defaultdict(set)
-    for en_pos, (en_string, *_) in en_itemnames_dict.items():
-        en_item_id = en_id_dict.get(en_pos, ([0], None))[0][0]
-        en_strings_by_item_id[en_item_id].add(en_string)
-
-    basename = os.path.basename(input_itemnames_file)
-    if "_" in basename:
-        prefix = basename.split("_", 1)[0]
-        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
-        output_filename = "{}_output_{}_filtered.txt".format(prefix, suffix)
-    else:
-        output_filename = "output_itemnames_filtered.txt"
-
-    with open(input_itemnames_file, "rb") as f, open(output_filename, "w", encoding="utf8") as out:
-        header = readUInt32(f)
-
-        while True:
-            # Read null-terminated UTF-8 string
-            string_bytes = bytearray()
-            while True:
-                char, shift = readExtendedChar(f)
-                if not char or char == b'\x00':
-                    break
-                string_bytes.extend(char)
-
-            if not string_bytes:
-                break
-
-            string_value = string_bytes.decode("utf-8", errors="replace")
-
-            try:
-                position_bytes = f.read(4)
-                if len(position_bytes) < 4:
-                    break
-                position_value = struct.unpack(">I", position_bytes)[0]
-
-                count_bytes = f.read(1)
-                if not count_bytes:
-                    break
-                item_id_count = struct.unpack(">B", count_bytes)[0]
-
-                f.read(4)  # skip offset
-
-                item_id = id_dict.get(position_value, ([0], None))[0][0]
-
-                # Fast skip if this string matches an English string for the same item_id
-                if string_value in en_strings_by_item_id.get(item_id, set()):
-                    continue
-
-                out.write("{{{{{}-{}-{}}}}}{}\n".format(position_value, item_id, item_id_count, string_value))
-
-            except Exception as e:
-                print("Error at string '{}': {}".format(string_value, e))
-                break
-
-    print("Done. Output written to {}".format(output_filename))
-
-
-
-
-
-
-@mainFunction
 def rebuild_itemnames_binary(input_txt, sort=False):
     """
     Rebuilds en_itemnames.dat-style binary file from text format:
@@ -791,6 +825,136 @@ def rebuild_itemnames_binary(input_txt, sort=False):
             previous_len = name_len
 
     print("Binary file written to", output_bin)
+
+
+@mainFunction
+def rebuild_formatted_itemnames_binary(input_itemnames_dat, input_itemids_dat, item_names_txt):
+    """
+    Builds a language-specific formatteditemnames .dat file using names from a language file.
+
+    Inputs:
+        pl_itemnames_dat: Path to the localized itemnames.dat
+        pl_itemids_dat:   Path to the localized itemids.dat
+        item_names_txt:   Path to the formatted names text (e.g. 242841733_item_names_ko.txt)
+
+    Output:
+        <prefix>_output_<suffix>.dat (binary)
+    """
+    itemid_to_formatted_itemnames = {}
+    with open(item_names_txt, "r", encoding="utf8") as f:
+        for line in f:
+            match = reLangStringId.match(line.strip())
+            if match:
+                item_id = int(match.group(1))
+                name = match.group(2).strip()
+                itemid_to_formatted_itemnames[item_id] = name
+
+    id_dict = parse_itemids_to_dict(input_itemids_dat)
+    names_dict = parse_itemnames_to_dict(input_itemnames_dat)
+
+    basename = os.path.basename(item_names_txt)
+    prefix = basename.split("_", 1)[0]
+    suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+    output_bin = "{}_output_{}.dat".format(prefix, suffix)
+
+    with open(output_bin, "wb") as out:
+        out.write(struct.pack(">I", 0x00000001))  # Header
+
+        for position in sorted(names_dict.keys()):
+            count, next_offset, fallback_name = names_dict[position]
+            item_id = id_dict.get(position, ([0], None))[0][0]
+            string = itemid_to_formatted_itemnames.get(item_id, fallback_name).strip()
+            out.write(string.encode("utf-8") + b'\x00')
+
+    print("Done. Binary written to", output_bin)
+
+
+def titlecase(text, lang="pl"):
+    locale = Locale(lang)
+    breaker = BreakIterator.createWordInstance(locale)
+    return UnicodeString(text).toTitle(breaker, locale).__str__()
+
+
+@mainFunction
+def rebuild_formatted_itemnames_binary_with_uppercase(input_itemnames_dat):
+    """
+    Builds a language-specific formatteditemnames .dat file using titlecased fallback names.
+
+    Inputs:
+        input_itemnames_dat: Path to the localized itemnames.dat
+        input_itemids_dat:   Path to the localized itemids.dat
+        item_names_txt:      Path to the formatted names text (only used for output file name)
+
+    Output:
+        <prefix>_output_<suffix>.dat (binary)
+    """
+    names_dict = parse_itemnames_to_dict(input_itemnames_dat)
+
+    basename = os.path.basename(input_itemnames_dat)
+    match = reFilenamePrefix.match(basename)
+    prefix = match.group(1) if match else "xx"  # fallback to "xx" if no match
+    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]
+    output_bin = "{}_output_formatteditemnames.dat".format(prefix, suffix)
+
+    with open(output_bin, "wb") as out:
+        out.write(struct.pack(">I", 0x00000001))  # Header
+
+        for position in sorted(names_dict.keys()):
+            count, next_offset, string_text = names_dict[position]
+            string = titlecase(string_text.strip(), lang="pl")
+            out.write(string.encode("utf-8") + b'\x00')
+
+    print("Done. Binary written to", output_bin)
+
+
+@mainFunction
+def merge_translated_itemnames(translated_txt_file, en_itemnames_file, en_itemids_file):
+    """
+    Builds a new itemnames file based on English structure, with translated strings substituted
+    where available by itemId match.
+
+    Inputs:
+        translated_txt_file: A .txt file of the form {{position-itemId-count}}translated name
+        en_itemnames_file: The English .dat file (names)
+        en_itemids_file: The English .dat file (ids)
+
+    Outputs:
+        merged_<translated_txt_file>.txt with full 1:1 line count, either translated or original English.
+    """
+    itemid_to_translated_strings = {}  # itemId → set of positions
+    with open(translated_txt_file, "r", encoding="utf8") as f:
+        for line in f:
+            match = re.match(r"^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$", line.strip())
+            if match:
+                position = int(match.group(1))
+                item_id = int(match.group(2))
+                count = int(match.group(3))
+                text = match.group(4).strip()
+                itemid_to_translated_strings[item_id] = text
+
+    # Read English itemids
+    id_dict = parse_itemids_to_dict(en_itemids_file)
+    # Read English itemnames
+    names_dict = parse_itemnames_to_dict(en_itemnames_file)
+
+    # Build output
+    output_lines = []
+    for position, data in names_dict.items():
+        item_id = id_dict[position][0][0]
+        count = data[0]
+        next_offset = data[1]
+        string_text = data[2]
+        hasTranslation = itemid_to_translated_strings.get(item_id) is not None
+        if hasTranslation:
+            string_text = itemid_to_translated_strings.get(item_id)
+        output_lines.append("{{{{{}-{}-{}}}}}{}".format(position, item_id, count, string_text))
+
+    out_file = "merged_" + os.path.basename(translated_txt_file)
+    with open(out_file, "w", encoding="utf8") as out:
+        for line in output_lines:
+            out.write(line + "\n")
+
+    print("Merged output written to", out_file)
 
 
 # These two functions process ESO language files like en_itemids.dat or pl_itemids.dat.

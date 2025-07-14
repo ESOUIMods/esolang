@@ -86,20 +86,6 @@ def main():
 
 
 # Regular Expressions for Text Processing -------------------------------------
-"""
-Here's a breakdown of how the reClientUntaged expression works:
-^: Anchors the start of the string.
-\[(.+?)\]: Matches a string enclosed in square brackets and captures the content
- inside the brackets as group 1 (.*?). The (.+?) is a non-greedy match for any
- characters within the brackets.
-= ": Matches the space, equals sign, and double quotation mark that follow the square brackets.
-(?!.*{[CP]:): A negative lookahead assertion that checks that the text ahead does
- not contain either {C: or {P:. This ensures that the text within the double
- quotation marks is not tagged as a language constant.
-(.*?): Captures the text between the double quotation marks as group 2 (.*?).
-": Matches the closing double quotation mark.
-$: Anchors the end of the string.
-"""
 
 # Matches a language index in the format {{identifier:}}text
 reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
@@ -121,6 +107,15 @@ reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
 reGenderSuffix = re.compile(r'\^[MmFfNn]')
+
+# Matches the 2-letter language prefix at the start of a filename, such as 'pl_itemnames.dat' or 'en.lang'
+reFilenamePrefix = re.compile(r'^([a-z]{2})[_\.]', re.IGNORECASE)
+
+# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
+reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
+
+# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
+reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 
 # Global Dictionaries ---------------------------------------------------------
 textUntranslatedLiveDict = {}
@@ -186,9 +181,6 @@ def preserve_and_restore_escaped_sequences(text):
 
 
 def preserve_escaped_sequences(text):
-    """
-    Convert Lua-style escape sequences to temporary placeholders to prevent interference during formatting.
-    """
     return (
         text
             .replace("\\n", "-=CR=-")
@@ -197,16 +189,16 @@ def preserve_escaped_sequences(text):
     )
 
 
+def restore_escaped_sequences(text):
+    return (
+        text
+            .replace("-=CR=-", "\\n")
+            .replace("-=EQ=-", '\\"')
+            .replace("-=DS=-", "\\\\")
+    )
+
+
 def preserve_escaped_sequences_bytes(raw_bytes):
-    """
-    Replaces common escape sequences in a bytes object with placeholders before decoding.
-
-    Args:
-        raw_bytes (bytes): e.g., b"Line1\\nLine2"
-
-    Returns:
-        str: A string with preserved escape sequences (e.g., "Line1-=CR=-Line2")
-    """
     raw_bytes = (
         raw_bytes
             .replace(b"\n", b"-=CR=-")
@@ -214,16 +206,26 @@ def preserve_escaped_sequences_bytes(raw_bytes):
     return raw_bytes
 
 
-def restore_escaped_sequences(text):
-    """
-    Restore temporary placeholders back to Lua-style escape sequences.
-    """
+def restore_escaped_sequences_bytes(raw_bytes):
     return (
-        text
-            .replace("-=CR=-", "\\n")
-            .replace("-=EQ=-", '\\"')
-            .replace("-=DS=-", "\\\\")
+        raw_bytes
+            .replace(b"-=CR=-", b"\n")
+            .replace(b"-=DS=-", b"\\\\")
     )
+
+
+def preserve_nbsp_bytes(raw_bytes):
+    """
+    Replaces non-breaking space (U+00A0 / b'\xC2\xA0') in bytes with a placeholder.
+    """
+    return raw_bytes.replace(b"\xC2\xA0", b"-=NB=-")
+
+
+def restore_nbsp_bytes(raw_bytes):
+    """
+    Restores non-breaking space placeholder back to b'\xC2\xA0'.
+    """
+    return raw_bytes.replace(b"-=NB=-", b"\xC2\xA0")
 
 
 def readExtendedChar(file):
@@ -749,82 +751,6 @@ def removeIndexFromEosui(txtFilename):
             out.write(lineOut)
 
 
-@mainFunction
-def strip_gender_suffix(input_file, output_file="output.txt"):
-    """
-    Reads a text file and removes ^M, ^F, ^m, ^f, ^N, ^n suffixes from all matching lines.
-
-    Args:
-        input_file (str): The source file containing ESO lang-formatted lines.
-        output_file (str): The output file with cleaned names.
-    """
-
-    with open(input_file, 'r', encoding='utf8') as infile, open(output_file, 'w', encoding='utf8') as outfile:
-        for line in infile:
-            cleaned_line = reGenderSuffix.sub('', line)
-            outfile.write(cleaned_line)
-
-    print("Stripped gender suffixes and saved to {}".format(output_file))
-
-
-@mainFunction
-def extract_npc_name_matches(tagged_txt_file, lua_input_file):
-    """
-    Parses a tagged ESO language file and a Lua file of known NPC names, then writes out two Lua files:
-    one for matched names using stringIndex as keys and one for unmatched ones.
-
-    Args:
-        tagged_txt_file (str): File with lines like {{8290981-0-123:}}Julien Rissiel^M
-        lua_input_file (str): Lua file with [npc_id] = "Name", lines
-    """
-    textUntranslatedLiveDict = {}
-    readTaggedLangFile(tagged_txt_file, textUntranslatedLiveDict)
-
-    # Build a cleaned name -> first stringIndex mapping from tagged lang file
-    name_to_stringIndex = {}
-    for tag, rawname in textUntranslatedLiveDict.items():
-        cleaned_name = reGenderSuffix.sub('', rawname.strip())
-        if cleaned_name not in name_to_stringIndex:
-            parts = tag.split('-')
-            if len(parts) == 3:
-                string_index = int(parts[2])
-                name_to_stringIndex[cleaned_name] = string_index
-
-    matched_output = []
-    unmatched_output = []
-
-    in_table = False
-    with open(lua_input_file, 'r', encoding='utf8') as luain:
-        for line in luain:
-            if 'lib.quest_givers["en"]' in line:
-                in_table = True
-                continue
-            if in_table and '}' in line:
-                break
-
-            match = re.match(r'\s*\[(\d+)\]\s*=\s*"(.+?)",?', line)
-            if match:
-                npc_id = int(match.group(1))
-                name = match.group(2).strip()
-                if name in name_to_stringIndex:
-                    string_index = name_to_stringIndex[name]
-                    matched_output.append('    [{}] = "{}",'.format(string_index, name))
-                else:
-                    unmatched_output.append('    [{}] = "{}",'.format(npc_id, name))
-
-    with open("npc_names_matched.lua", 'w', encoding='utf8') as out:
-        out.write("return {\n")
-        out.write("\n".join(matched_output))
-        out.write("\n}\n")
-
-    with open("npc_names_unmatched.lua", 'w', encoding='utf8') as out:
-        out.write("return {\n")
-        out.write("\n".join(unmatched_output))
-        out.write("\n}\n")
-
-    print("Done. Wrote matched and unmatched NPC name files.")
-
-
 def readNullStringByChar(offset, start, file):
     """Reads a null-terminated UTF-8 string one char at a time, preserving raw binary bytes."""
     currentPosition = file.tell()
@@ -962,7 +888,8 @@ def writeLangFile(languageFileName, fileIndexes, fileStrings):
         for index in range(numStrings):
             currentDict = fileStrings[index]
             currentString = currentDict['string']
-            indexOut.write(currentString + b'\x00')
+            restore_nbsp = restore_nbsp_bytes(currentString)
+            indexOut.write(restore_nbsp + b'\x00')
 
 
 @mainFunction
@@ -976,8 +903,9 @@ def rebuildLangFileWithPointers(inputLangFile):
         inputLangFile (str): The name of the input .lang file (e.g. 'en.lang', 'ko.lang').
 
     Output:
-        Writes one file:
-        - '{prefix}_output_{suffix}.lang': the optimized language file
+        {prefix}_output_{suffix}.lang: the optimized language file
+
+        For example, if the input is 'en.lang', the output will be 'en_output.lang'.
     """
     basename = os.path.basename(inputLangFile)
     prefix = basename.split("_", 1)[0]
@@ -991,7 +919,7 @@ def rebuildLangFileWithPointers(inputLangFile):
     print("Optimized file written to: {}".format(output_filename))
 
 
-def processSectionIDs(outputFileName, currentFileIndexes):
+def processSectionIDs(currentFileIndexes, outputFileName):
     numIndexes = currentFileIndexes['numIndexes']
     currentSection = None
     sectionCount = 0
@@ -1002,38 +930,28 @@ def processSectionIDs(outputFileName, currentFileIndexes):
             if sectionId != currentSection:
                 sectionCount += 1
                 sectionOut.write(
-                    "    'section_unknown_{}': {{'sectionId': {}, 'sectionName': 'section_unknown_{}'}},\n".format(
-                        sectionCount, sectionId, sectionCount))
+                    f"    'section_unknown_{sectionCount}': {{'sectionId': {sectionId}, 'sectionName': 'section_unknown_{sectionCount}'}},\n"
+                )
                 currentSection = sectionId
 
 
 @mainFunction
-def extractSectionIDs(currentLanguageFile, outputFileName):
+def build_section_constants(currentLanguageFile):
     """
-    Extract section ID numbers from a language file and write them to an output file.
-
-    This function reads a provided language file, extracts the section ID numbers
-    associated with the strings in the language file, and writes a list of unique
-    section ID numbers to the specified output file.
+    Builds section_constants_output.py containing section constant mappings
+    extracted from a .lang file. Each unique sectionId is labeled with
+    a generated section name like 'section_unknown_X'.
 
     Args:
-        currentLanguageFile (str): The name of the current language file to read.
-        outputFileName (str): The name of the output file to write section ID numbers to.
+        currentLanguageFile (str): Path to the input .lang file.
 
-    Note:
-        The extracted section ID numbers are written to the output file in the format:
-        section_unknown_1 = <section_id>
-        section_unknown_2 = <section_id>
-        ...
-
-    Example:
-        Given a language file 'en.lang' containing strings and section ID information,
-        calling extractSectionIDs('en.lang', 'section_ids.txt') will create 'section_ids.txt'
-        with a list of unique section ID numbers.
-
+    Output:
+        section_constants_output.py
     """
     currentFileIndexes, currentFileStrings = readLangFile(currentLanguageFile)
+    outputFileName = "section_constants_output.py"
     processSectionIDs(outputFileName, currentFileIndexes)
+    print("Section constants written to:", outputFileName)
 
 
 @mainFunction
@@ -1047,25 +965,31 @@ def extractSectionEntries(langFile, section_arg, useName=True):
         useName (bool): If True, filenames will include both ID and section name (if known). Default is False.
 
     Writes:
-        <sectionId>.txt or <sectionId>-<sectionName>.txt
+        <sectionId>.txt, <sectionId>_lorebook_names.txt, or <sectionId>_lorebook_names_pl.txt depending on input.
     """
     try:
         section_id = int(section_arg)
         section_key = get_section_key_by_id(section_id)
-        if useName and section_key and not re.match(r'section_unknown_\d+$', section_key):
-            output_name = "{}_{}.txt".format(section_id, section_key)
-        else:
-            output_name = "{}.txt".format(section_id)
     except ValueError:
         section_id = get_section_id(section_arg)
         if section_id is None:
             print("Error: Unknown section name '{}'".format(section_arg))
             return
         section_key = section_arg
-        if useName:
-            output_name = "{}-{}.txt".format(section_id, section_key)
-        else:
-            output_name = "{}.txt".format(section_id)
+
+    # Determine language suffix like _pl or _en based on filename
+    basename = os.path.basename(langFile)
+    lang_suffix = ""
+    lang_match = reFilenamePrefix.match(basename.lower())
+    if lang_match:
+        lang_code = lang_match.group(1)
+        lang_suffix = "_" + lang_code
+
+    # Determine output filename
+    if useName and section_key and not re.match(r'section_unknown_\d+$', section_key):
+        output_name = "{}_{}{}.txt".format(section_id, section_key, lang_suffix)
+    else:
+        output_name = "{}{}.txt".format(section_id, lang_suffix)
 
     fileIndexes, fileStrings = readLangFile(langFile)
 
@@ -1077,7 +1001,8 @@ def extractSectionEntries(langFile, section_arg, useName=True):
                 secIdx = entry['sectionIndex']
                 strIdx = entry['stringIndex']
                 raw_bytes = entry['string']
-                escaped_bytes = preserve_escaped_sequences_bytes(raw_bytes)
+                preserved_nbsp = preserve_nbsp_bytes(raw_bytes)
+                escaped_bytes = preserve_escaped_sequences_bytes(preserved_nbsp)
                 utf8_string = bytes(escaped_bytes).decode("utf8", errors="replace")
                 formatted = "{{{{{}-{}-{}:}}}}{}\n".format(secId, secIdx, strIdx, utf8_string)
                 lineOut = restore_escaped_sequences(formatted)
@@ -1228,7 +1153,7 @@ def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBase
 
 
 @mainFunction
-def createWeblateFile(inputFile, lang="en", outputFile=None, component=None):
+def createEsoUIWeblateFile(inputFile, lang="en", outputFile=None, component=None):
     """
     Generate a YAML file for Weblate translation.
 
@@ -1685,7 +1610,7 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile=
 
 
 @mainFunction
-def compareTaggedSourceForTranslation(translated_tagged_text, previous_tagged_english_text, current_tagged_english_text):
+def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged_english_text, current_tagged_english_text):
     """
     Compare translations between different versions of language files.
 
@@ -1842,6 +1767,141 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
 
 
 @mainFunction
+def generate_tagged_lang_text(input_lang_file):
+    """
+    Reads a .lang file and outputs a tagged text file in the format:
+    {{sectionId-stringId:}}text
+
+    Args:
+        input_lang_file (str): Path to a .lang file like en.lang, ko.lang, etc.
+
+    Output:
+        <prefix>_tagged_<suffix>.txt — where <prefix> is the language (e.g., 'ko') and
+        <suffix> is the rest of the filename excluding the extension.
+    """
+    currentFileIndexes, currentFileStrings = readLangFile(input_lang_file)
+
+    basename = os.path.basename(input_lang_file)
+    match = reFilenamePrefix.match(basename)
+    prefix = match.group(1) if match else "xx"
+    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]
+    output_txt = "{}_tagged_{}.txt".format(prefix, suffix)
+
+    with open(output_txt, 'w', encoding="utf-8") as out:
+        for index in range(currentFileIndexes["numIndexes"]):
+            entry = currentFileIndexes[index]
+            text = entry.get("string")
+            if text:
+                preserved_nbsp = preserve_nbsp_bytes(text)
+                escaped = preserve_escaped_sequences_bytes(preserved_nbsp)
+                decoded = escaped.decode("utf-8", errors="replace")
+                formatted = "{{{{{}-{}-{}:}}}}{}\n".format(
+                    entry["sectionId"],
+                    entry["sectionIndex"],
+                    entry["stringIndex"],
+                    decoded.rstrip()
+                )
+                lineOut = restore_escaped_sequences(formatted)
+                out.write(lineOut)
+
+    print("Tagged language text written to:", output_txt)
+
+
+def read_tagged_text_to_dict(tagged_text_file):
+    """
+    Parses a tagged .txt file (e.g. {{sectionId-sectionIndex-stringId:}}text) into
+    dictionaries.
+
+    Args:
+        tagged_text_file (str): Path to the tagged language text file.
+
+    Returns:
+        fileIndexes (dict), fileStrings (dict): Mapped data from tagged input.
+    """
+    numSections = 0
+    numIndexes = 0
+    predictedOffset = 0
+    stringCount = 0
+    fileIndexes = {'numIndexes': numIndexes, 'numSections': numSections}
+    fileStrings = {'stringCount': stringCount}
+    index = 0
+
+    with open(tagged_text_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            match = reLangTagged.match(line)
+            if not match:
+                continue  # skip invalid lines
+
+            sectionId = int(match.group(1))
+            sectionIndex = int(match.group(2))
+            stringIndex = int(match.group(3))
+            stringText = match.group(4).rstrip()
+            escaped = preserve_escaped_sequences(stringText)
+            encoded = escaped.encode("utf-8")
+            stringText = restore_escaped_sequences_bytes(encoded)
+
+            fileIndexes[index] = {
+                'sectionId': sectionId,
+                'sectionIndex': sectionIndex,
+                'stringIndex': stringIndex,
+                'stringOffset': predictedOffset,
+                'string': stringText,
+            }
+
+            # Ensure each string is stored once in fileStrings
+            if stringText not in fileStrings:
+                fileStrings[stringText] = {
+                    'stringOffset': predictedOffset,
+                }
+                fileStrings[stringCount] = {
+                    'string': stringText,
+                }
+                # add one to stringCount
+                stringCount += 1
+                # 1 extra for the null terminator
+                predictedOffset += (len(stringText) + 1)
+                if b"-=NB=-" in stringText:
+                    predictedOffset -= (len(b"-=NB=-") - 2)
+
+            index += 1
+
+    fileIndexes["numIndexes"] = index
+    fileIndexes["numSections"] = 2  # can be updated if needed
+    fileStrings["stringCount"] = stringCount
+
+    print("String Count: {}".format(stringCount))
+    print("Number of Indexes: {}".format(index))
+    return fileIndexes, fileStrings
+
+
+@mainFunction
+def rebuildLangFileFromTaggedText(input_tagged_file):
+    """
+    Reads a language file, identifies duplicate strings, and ensures that repeated strings
+    share the same offset in the output. This rebuilds the language file so that identical
+    strings are stored only once.
+
+    Args:
+        inputLangFile (str): The name of the input .lang file (e.g. 'en.lang', 'ko.lang').
+
+    Output:
+        {prefix}_output_{suffix}.lang: the optimized language file
+
+        For example, if the input is 'en.lang', the output will be 'en_output.lang'.
+    """
+    basename = os.path.basename(input_tagged_file)
+    prefix = basename.split("_", 1)[0]
+    suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+    output_filename = "{}_output_{}.lang".format(prefix, suffix)
+
+    currentFileIndexes, currentFileStrings = read_tagged_text_to_dict(input_tagged_file)
+    print("String Count: {}".format(currentFileStrings['stringCount']))
+    writeLangFile(output_filename, currentFileIndexes, currentFileStrings)
+
+    print("Optimized file written to: {}".format(output_filename))
+
+
+@mainFunction
 def diffEnglishLangFiles(LiveFilename, ptsFilename):
     """
     Compare differences between the current and PTS 'en.lang' files after conversion to text and tagging.
@@ -1945,6 +2005,10 @@ def diffEnglishLangFiles(LiveFilename, ptsFilename):
     # Write added indexes
     write_output_file("addedIndexes.txt", addedText, addedIndexCount, 'added')
 
+
+# =============================================================================
+# Functions below this line are for testing or future use only
+# =============================================================================
 
 @mainFunction
 def apply_byte_offset_to_hangul(input_filename):
@@ -2172,96 +2236,6 @@ def print_groups():
             print("Group 2:", maFontTag.group(2))
 
         print()
-
-
-@mainFunction
-def detect_encoding_for_each_char(inputFile):
-    """
-    This function reads each character from the specified binary file (inputFile)
-    and attempts to detect the encoding of each character individually using the
-    chardet library. It is important to note that this approach is for testing purposes
-    only and is not a definitive method to accurately determine the encoding of each
-    character. Encoding detection is a complex task, and relying on individual characters
-    may lead to inaccurate results.
-
-    Usage:
-    detect_encoding_for_each_char(inputFile)
-
-    Parameters:
-    - inputFile (str): The path to the binary file to be analyzed.
-
-    Note: The results are printed to the console, displaying the character and the
-    detected encoding for each. It is recommended not to use this method as a means
-    to argue or determine the encoding of a string comprehensively.
-
-    Example:
-    detect_encoding_for_each_char("example.bin")
-    """
-
-    not_eof = True
-    with open(inputFile, 'rb') as textIns:
-        while not_eof:
-            shift = 1
-            char = textIns.read(shift)
-            value = int.from_bytes(char, "big")
-            next_char = None
-            if value > 0x00 and value <= 0x74:
-                shift = 1
-            elif value >= 0xc0 and value <= 0xdf:
-                shift = 2
-            elif value >= 0xe0 and value <= 0xef:
-                shift = 3
-            elif value >= 0xf0 and value <= 0xf7:
-                shift = 4
-            if shift > 1:
-                next_char = textIns.read(shift - 1)
-            if next_char:
-                char = b''.join([char, next_char])
-            if not char:
-                # eof
-                break
-
-            result = chardet.detect(char)
-            detected_encoding = result['encoding']
-            print("Character: {}, Detected Encoding: {}".format(char.decode(detected_encoding, 'replace'),
-                                                                detected_encoding))
-
-
-@mainFunction
-def convert_file_encoding(inputFile):
-    not_eof = True
-    with open(inputFile, 'rb') as textIns:
-        with open("output.txt", 'w', encoding="utf-8") as out:
-            while not_eof:
-                shift = 1
-                char = textIns.read(shift)
-                value = int.from_bytes(char, "big")
-                next_char = None
-                if value > 0x00 and value <= 0x74:
-                    shift = 1
-                elif value >= 0xc0 and value <= 0xdf:
-                    shift = 2
-                elif value >= 0xe0 and value <= 0xef:
-                    shift = 3
-                elif value >= 0xf0 and value <= 0xf7:
-                    shift = 4
-                if shift > 1:
-                    next_char = textIns.read(shift - 1)
-                if next_char:
-                    char = b''.join([char, next_char])
-                if not char:
-                    # eof
-                    break
-
-                result = chardet.detect(char)
-                detected_encoding = result['encoding']
-                decoded_char = char.decode(detected_encoding, 'replace')
-
-                # Re-encode the decoded character to UTF-8
-                utf8_encoded_char = decoded_char.encode('utf-8')
-
-                # Write the re-encoded character to the output file
-                out.write(utf8_encoded_char.decode('utf-8'))
 
 
 if __name__ == "__main__":
