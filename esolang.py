@@ -234,6 +234,13 @@ def restore_nbsp_bytes(raw_bytes):
     return raw_bytes.replace(b"-=NB=-", b"\xC2\xA0")
 
 
+def normalize_crowdin_csv_line(line):
+    if line.startswith('"[') and line.count('","') == 1 and line.endswith('"'):
+        key_part, value_part = line[1:-1].split('","', 1)
+        return f"{key_part} = \"{value_part}\""
+    return line
+
+
 def readExtendedChar(file):
     """
     Reads a UTF-8 character from file, returning raw bytes and byte count.
@@ -1031,6 +1038,7 @@ def processEosuiTextFile(filename, text_dict):
     with open(filename, 'r', encoding="utf8") as textIns:
         for line in textIns:
             line = line.rstrip()
+            line = normalize_crowdin_csv_line(line)
             maEmptyString = reEmptyString.match(line)
             maClientUntaged = reClientUntaged.match(line)
 
@@ -1786,6 +1794,14 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
     the existing translation or the live/PTS text. The result is saved in an 'output.txt' file containing
     merged entries with translated text if available.
     """
+
+    # Generate a dynamic output filename from the translated string file
+    basename = os.path.basename(translated_string_file)
+    match = reFilenamePrefix.match(basename)
+    prefix = match.group(1) if match else "xx"  # fallback prefix
+    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]  # e.g., "client" or "pregame"
+    output_filename = f"{prefix}_output_{suffix}.txt"
+
     # Read translated text ----------------------------------------------------
     processEosuiTextFile(translated_string_file, textTranslatedDict)
     # Read live text ----------------------------------------------------
@@ -1793,7 +1809,7 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
     # Read pts text ----------------------------------------------------
     processEosuiTextFile(current_english_string_file, textUntranslatedPTSDict)
     # --Write Output ------------------------------------------------------
-    with open("output.txt", 'w', encoding="utf8") as out:
+    with open(output_filename, 'w', encoding="utf8") as out:
         for key in textUntranslatedPTSDict:
             translatedText = textTranslatedDict.get(key)
             liveText = textUntranslatedLiveDict.get(key)
@@ -1823,6 +1839,8 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
             formatted = '[{}] = "{}"\n'.format(key, escaped)
             restored = restore_escaped_sequences(formatted)
             out.write(restored)
+
+    print("Done. Output written to {}".format(output_filename))
 
 
 @mainFunction
@@ -1959,6 +1977,7 @@ def rebuildLangFileFromTaggedText(input_tagged_file):
 
     print("Optimized file written to: {}".format(output_filename))
 
+
 @mainFunction
 def parse_xliff_to_dict(xliff_path, output_txt_path):
     """
@@ -2008,6 +2027,7 @@ def parse_xliff_to_dict(xliff_path, output_txt_path):
         out_file.write("\n".join(output_lines))
 
     print("Parsed XLIFF written to:", output_txt_path)
+
 
 @mainFunction
 def diffEnglishLangFiles(LiveFilename, ptsFilename):
