@@ -130,6 +130,13 @@ def writeUInt32(file, value): file.write(struct.pack('>I', value))
 def writeUInt64(file, value): file.write(struct.pack('>Q', value))
 
 
+def restore_nbsp_bytes(raw_bytes):
+    """
+    Restores non-breaking space placeholder back to b'\xC2\xA0'.
+    """
+    return raw_bytes.replace(b"-=NB=-", b"\xC2\xA0")
+
+
 def readExtendedChar(file):
     """
     Reads a UTF-8 character from file, returning raw bytes and byte count.
@@ -807,10 +814,11 @@ def rebuild_itemnames_binary(input_txt, sort=False):
         current_offset = None
 
         for i, (encoded_name, pos, count) in enumerate(entries):
-            name_len = len(encoded_name) + 1  # null terminator
+            restored = restore_nbsp_bytes(encoded_name)
+            name_len = len(restored) + 1  # null terminator
 
             # Write string + null
-            out.write(encoded_name)
+            out.write(restored)
             out.write(b'\x00')
 
             # Write 4-byte position

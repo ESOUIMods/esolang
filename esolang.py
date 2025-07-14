@@ -13,6 +13,7 @@ from ruamel.yaml.scalarstring import PreservedScalarString
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
 import polib
+import xml.etree.ElementTree as ET
 
 """
 From powershell 6.1.7600.16385 you may see question marks rather then the Korean or Chinese text on windows 7.
@@ -116,6 +117,11 @@ reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
 reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
+
+# Matches lines in the format {{position-itemId-count}}string_text from itemnames .txt files
+reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
+
+reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 
 # Global Dictionaries ---------------------------------------------------------
 textUntranslatedLiveDict = {}
@@ -1496,6 +1502,59 @@ def convertLangToPo(input_txt, output_po=None):
     print("PO output written to {}".format(output_po))
 
 
+@mainFunction
+def mergeItemnamesToPo(english_txt, translated_txt, output_po=None):
+    """
+    Merges English and translated ESO .txt lang files into a Weblate-compatible PO file.
+
+    Args:
+        english_txt (str): Tagged English file with lines like {{...}}Text.
+        translated_txt (str): Tagged file in target language (e.g., Polish).
+        output_po (str, optional): Output PO filename.
+
+    Writes:
+        A .po file where msgctxt is the key, msgid is English, and msgstr is translation.
+    """
+    po = polib.POFile()
+
+    # Use fallback name if output not specified
+    if output_po is None:
+        base = os.path.splitext(os.path.basename(translated_txt))[0]
+        output_po = "{}_merged.po".format(base)
+
+    # Load English
+    english_map = {}
+    with open(english_txt, 'r', encoding='utf-8') as f:
+        for line in f:
+            match = reItemnameTagged.match(line.rstrip())
+            if match:
+                key = "{{{{{}-{}-{}}}}}".format(match.group(1), match.group(2), match.group(3))
+                text = match.group(4)
+                english_map[key] = text
+
+    # Load Translated
+    translated_map = {}
+    with open(translated_txt, 'r', encoding='utf-8') as f:
+        for line in f:
+            match = reItemnameTagged.match(line.rstrip())
+            if match:
+                key = "{{{{{}-{}-{}}}}}".format(match.group(1), match.group(2), match.group(3))
+                text = match.group(4)
+                translated_map[key] = text
+
+    # Merge
+    for key, en_text in english_map.items():
+        entry = polib.POEntry(
+            msgctxt=key,
+            msgid=en_text,
+            msgstr=translated_map.get(key, "")
+        )
+        po.append(entry)
+
+    po.save(output_po)
+    print("Merged PO written to:", output_po)
+
+
 def readTaggedLangFile(taggedFile, targetDict):
     with open(taggedFile, 'r', encoding="utf8") as textIns:
         for line in textIns:
@@ -1900,6 +1959,55 @@ def rebuildLangFileFromTaggedText(input_tagged_file):
 
     print("Optimized file written to: {}".format(output_filename))
 
+@mainFunction
+def parse_xliff_to_dict(xliff_path, output_txt_path):
+    """
+    Parses a Crowdin XLIFF 1.2 file and writes ESO-tagged lines for entries with numeric resname
+    and target state 'translated' or 'final'.
+
+    Args:
+        xliff_path (str): Path to the input .xliff file.
+        output_txt_path (str): Path to the output .txt file in tagged lang format.
+    """
+    context = ET.iterparse(xliff_path, events=("start", "end"))
+    _, root = next(context)  # get root element
+
+    current_resname = None
+    current_state = None
+    current_text = None
+    output_lines = []
+
+    for event, elem in context:
+        if event == "start":
+            if elem.tag.endswith("trans-unit"):
+                current_resname = elem.attrib.get("resname")
+            elif elem.tag.endswith("target"):
+                current_state = elem.attrib.get("state")
+        elif event == "end":
+            if elem.tag.endswith("target"):
+                current_text = (elem.text or "").strip()
+
+            elif elem.tag.endswith("trans-unit"):
+                # process if valid numeric resname and translated
+                if current_resname and reResNameId.match(current_resname):
+                    if current_state in ("translated", "final"):
+                        sectionId, sectionIndex, stringIndex = reResNameId.match(current_resname).groups()
+                        output_line = "{{{{{}-{}-{}:}}}}{}".format(
+                            sectionId, sectionIndex, stringIndex, current_text
+                        )
+                        output_lines.append(output_line)
+
+                # clear variables and free memory
+                current_resname = None
+                current_state = None
+                current_text = None
+                elem.clear()
+                root.clear()
+
+    with open(output_txt_path, "w", encoding="utf-8") as out_file:
+        out_file.write("\n".join(output_lines))
+
+    print("Parsed XLIFF written to:", output_txt_path)
 
 @mainFunction
 def diffEnglishLangFiles(LiveFilename, ptsFilename):
