@@ -86,3 +86,14 @@
 /dist
 /build
 /deleteLibStub.spec
+/*.txt
+/*.bak
+/*.dat
+/*.lang
+/*.zip
+/*.po
+/*.xml
+/*.str
+/*.csv
+/tagged_text
+/*.lua
