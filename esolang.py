@@ -378,6 +378,14 @@ def addIndexToLangFile(txtFilename, idFilename):
     textLines = []
     idLines = []
 
+    basename = os.path.basename(txtFilename)
+    if "_" in basename and "." in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = f"{prefix}_output_add_index_{suffix}.txt"
+    else:
+        output_filename = "output_add_index.txt"
+
     # Read text file and count lines
     textLineCount = 0
     with open(txtFilename, 'r', encoding="utf8") as textIns:
@@ -398,10 +406,12 @@ def addIndexToLangFile(txtFilename, idFilename):
         print("Error: Number of lines in text and identifier files do not match. Aborting.")
         return
 
-    with open('output.txt', 'w', encoding="utf8") as output:
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as output:
         for i in range(len(textLines)):
-            lineOut = '{{{{{}:}}}}'.format(idLines[i]) + textLines[i] + '\n'
-            output.write(lineOut)
+            lineOut = '{{{{{}:}}}}'.format(idLines[i]) + textLines[i]
+            output.write(lineOut + '\n')
+
+    print(f"Output written to: {output_filename}")
 
 
 @mainFunction
@@ -437,6 +447,14 @@ def removeIndexToLangFile(txtFilename):
     # Get ID numbers ------------------------------------------------------
     textLines = []
 
+    basename = os.path.basename(txtFilename)
+    if "_" in basename and "." in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = f"{prefix}_output_remove_index_{suffix}.txt"
+    else:
+        output_filename = "output_remove_index.txt"
+
     with open(txtFilename, 'r', encoding="utf8") as textIns:
         for line in textIns:
             matchIndex = reLangIndex.match(line)
@@ -449,10 +467,10 @@ def removeIndexToLangFile(txtFilename):
                 newString = text.lstrip()
                 textLines.append(newString)
 
-    with open("output.txt", 'w', encoding="utf8") as out:
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as output:
         for line in textLines:
             lineOut = '{}\n'.format(line)
-            out.write(lineOut)
+            output.write(lineOut + '\n')
 
 
 @mainFunction
@@ -463,7 +481,7 @@ def koreanToEso(txtFilename):
     This function reads a source text file containing Korean UTF-8 encoded text and applies a byte offset to convert it to
     Chinese UTF-8 encoded text. The byte offset is used to shift the Korean text to a range that is normally occupied by
     Chinese characters. This technique is used in Elder Scrolls Online (ESO) to display Korean text using a nonstandard font
-    that resides in the Chinese character range. The converted text is saved in a new file named 'output.txt'.
+    that resides in the Chinese character range. The converted text is saved in a new file with a descriptive output name.
 
     Args:
         txtFilename (str): The filename of the source text file containing Korean UTF-8 encoded text.
@@ -471,7 +489,7 @@ def koreanToEso(txtFilename):
     Notes:
         - The function reads the source file in binary mode and applies a byte-level analysis to determine the proper conversion.
         - A byte offset is added to the Unicode code points of the Korean characters to position them within the Chinese character range.
-        - The resulting Chinese UTF-8 encoded text is written to the 'output.txt' file in UTF-8 encoding.
+        - The resulting Chinese UTF-8 encoded text is written to a new UTF-8 text file.
 
     Example:
         Given a source text file 'korean.txt' with Korean UTF-8 encoded text:
@@ -483,11 +501,18 @@ def koreanToEso(txtFilename):
         ```
         犘璔 渀滠 蓶瓤
         ```
-
     """
+    basename = os.path.basename(txtFilename)
+    if "_" in basename and "." in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = f"{prefix}_output_koreanToEso_{suffix}.txt"
+    else:
+        output_filename = "output_koreanToEso.txt"
+
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
-        with open("output.txt", 'w', encoding="utf8") as out:
+        with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
             while not_eof:
                 shift = 1
                 char = textIns.read(shift)
@@ -526,7 +551,9 @@ def koreanToEso(txtFilename):
                         temp = temp - 0x3F800
                 char = temp.to_bytes(shift, byteorder='big')
                 outText = codecs.decode(char, 'UTF-8')
-                out.write(outText)
+                out.write(outText + '\n')
+
+    print(f"Output written to: {output_filename}")
 
 
 @mainFunction
@@ -537,7 +564,8 @@ def esoToKorean(txtFilename):
     This function reads a source text file containing Chinese UTF-8 encoded text and applies an opposite byte offset to
     convert it to traditional Korean UTF-8 encoded text. The byte offset reversal is used to shift the Chinese text back
     to its original traditional Korean character range. This technique is used when working with Chinese text that has
-    been encoded using a byte offset to simulate Korean characters. The converted text is saved in a new file named 'output.txt'.
+    been encoded using a byte offset to simulate Korean characters. The converted text is saved in a new file with a
+    descriptive output filename.
 
     Args:
         txtFilename (str): The filename of the source text file containing Chinese UTF-8 encoded text (e.g., 'kr.lang.txt').
@@ -546,7 +574,7 @@ def esoToKorean(txtFilename):
         - The function reads the source file in binary mode and applies a byte-level analysis to determine the proper conversion.
         - An opposite byte offset is subtracted from the Unicode code points of the Chinese characters to convert them back to
           their original traditional Korean characters.
-        - The resulting traditional Korean UTF-8 encoded text is written to the 'output.txt' file in UTF-8 encoding.
+        - The resulting traditional Korean UTF-8 encoded text is written to a new UTF-8 text file.
 
     Example:
         Given a source text file 'kr.lang.txt' with Chinese UTF-8 encoded text:
@@ -558,11 +586,20 @@ def esoToKorean(txtFilename):
         ```
         나는 가고 싶다
         ```
-
     """
+    import os
+
+    basename = os.path.basename(txtFilename)
+    if "_" in basename and "." in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = f"{prefix}_output_esoToKorean_{suffix}.txt"
+    else:
+        output_filename = "output_esoToKorean.txt"
+
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
-        with open("output.txt", 'w', encoding="utf8") as out:
+        with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
             while not_eof:
                 shift = 1
                 char = textIns.read(shift)
@@ -601,7 +638,9 @@ def esoToKorean(txtFilename):
                         temp = temp + 0x3F800
                 char = temp.to_bytes(shift, byteorder='big')
                 outText = codecs.decode(char, 'UTF-8')
-                out.write(outText)
+                out.write(outText + '\n')
+
+    print(f"Output written to: {output_filename}")
 
 
 @mainFunction
@@ -680,6 +719,14 @@ def addIndexToEosui(txtFilename):
     textLines = []
     indexPrefix = ""
 
+    basename = os.path.basename(txtFilename)
+    if "_" in basename and "." in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = f"{prefix}_output_add_index_esoui_{suffix}.txt"
+    else:
+        output_filename = "output_add_index_esoui.txt"
+
     if re.search('client', txtFilename):
         indexPrefix = "C:"
     if re.search('pregame', txtFilename):
@@ -696,23 +743,22 @@ def addIndexToEosui(txtFilename):
                 continue
             elif maEmptyString:
                 conIndex = maEmptyString.group(1)
-                lineOut = '[{}] = ""\n'.format(conIndex)
+                lineOut = '[{}] = ""'.format(conIndex)
                 textLines.append(lineOut)
             elif maClientUntaged:
                 conIndex = maClientUntaged.group(1)
                 conText = maClientUntaged.group(2) or ''
                 conTextPreserved = preserve_escaped_sequences(conText)
                 if conIndex not in no_prefix_indexes:
-                    formattedLine = '[{}] = "{{{}}}{}"\n'.format(conIndex, indexPrefix + str(indexCount),
-                                                                 conTextPreserved)
+                    formattedLine = '[{}] = "{{{}}}{}"'.format(conIndex, indexPrefix + str(indexCount), conTextPreserved)
                 else:
-                    formattedLine = '[{}] = "{}"\n'.format(conIndex, conTextPreserved)
+                    formattedLine = '[{}] = "{}"'.format(conIndex, conTextPreserved)
                 lineOut = restore_escaped_sequences(formattedLine)
                 textLines.append(lineOut)
 
-    with open("output.txt", 'w', encoding="utf8") as out:
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for line in textLines:
-            out.write(line)
+            out.write(line + '\n')
 
 
 @mainFunction
@@ -742,9 +788,16 @@ def removeIndexFromEosui(txtFilename):
         ```
         [SI_LOCATION_NAME] = "Gonfalon Bay"
         ```
-
     """
     textLines = []
+
+    basename = os.path.basename(txtFilename)
+    if "_" in basename and "." in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = f"{prefix}_output_remove_index_esoui_{suffix}.txt"
+    else:
+        output_filename = "output_remove_index_esoui.txt"
 
     with open(txtFilename, 'r', encoding="utf8") as textIns:
         for line in textIns:
@@ -753,7 +806,7 @@ def removeIndexFromEosui(txtFilename):
             maEmptyString = reEmptyString.search(line)
 
             if maFontTag or maEmptyString:
-                textLines.append(line + "\n")
+                textLines.append(line)
                 continue
 
             maClientTaged = reClientTaged.match(line)
@@ -761,15 +814,15 @@ def removeIndexFromEosui(txtFilename):
                 conIndex = maClientTaged.group(1)
                 conText = maClientTaged.group(3)
                 escaped = preserve_escaped_sequences(conText)
-                formatted = '[{}] = "{}"\n'.format(conIndex, escaped)
+                formatted = '[{}] = "{}"'.format(conIndex, escaped)
                 lineOut = restore_escaped_sequences(formatted)
                 textLines.append(lineOut)
             elif line:
-                textLines.append(line + "\n")
+                textLines.append(line)
 
-    with open("output.txt", 'w', encoding="utf8") as out:
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for lineOut in textLines:
-            out.write(lineOut)
+            out.write(lineOut + '\n')
 
 
 def readNullStringByChar(offset, start, file):
