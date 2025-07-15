@@ -104,6 +104,30 @@ reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
 reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 
+# Matches an old-style language index in the format identifier text
+reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
+
+# Matches untagged client strings or empty lines in the format [key] = "value" or [key] = ""
+reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
+
+# Matches tagged client strings in the format [key] = "{tag:value}text"
+reClientTaged = re.compile(r'^\[(.+?)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
+
+# Matches empty client strings in the format [key] = ""
+reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
+
+# Matches a font tag in the format [Font:font_name]
+reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
+
+# Matches a resource name ID in the format sectionId-sectionIndex-stringIndex
+reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
+
+# Matches tagged lang entries with optional chunk index after colon
+# Group 1: stringId as "sectionId-sectionIndex-stringIndex"
+# Group 2 (optional): chunk index (e.g., ":1", ":2", etc.)
+# Group 3: the actual translated or source text string
+reLangChunkedString = re.compile(r'\{\{(\d+-\d+-\d+)(?::(\d+))?\}\}(.*)')
+
 
 # Read and write binary structs
 def readUByte(file): return struct.unpack('>B', file.read(1))[0]
@@ -637,7 +661,6 @@ def extract_formatted_itemnames(input_file):
                 buffer.extend(byte)
 
     print("Done. Extracted {} strings to {}.".format(string_count, output_filename))
-
 
 
 @mainFunction

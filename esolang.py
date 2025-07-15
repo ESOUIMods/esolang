@@ -14,6 +14,7 @@ from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
 import polib
 import xml.etree.ElementTree as ET
+from icu import BreakIterator, Locale
 
 """
 From powershell 6.1.7600.16385 you may see question marks rather then the Korean or Chinese text on windows 7.
@@ -88,8 +89,23 @@ def main():
 
 # Regular Expressions for Text Processing -------------------------------------
 
+# Matches the 2-letter language prefix at the start of a filename, such as 'pl_itemnames.dat' or 'en.lang'
+reFilenamePrefix = re.compile(r'^([a-z]{2})[_\.]', re.IGNORECASE)
+
+# Matches lines in the format {{position-itemId-count}}string_text from itemnames .txt files
+reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
+
+# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
+reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
+
+# Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
+reGenderSuffix = re.compile(r'\^[MmFfNn]')
+
 # Matches a language index in the format {{identifier:}}text
 reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
+
+# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
+reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 
 # Matches an old-style language index in the format identifier text
 reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
@@ -106,22 +122,14 @@ reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
 # Matches a font tag in the format [Font:font_name]
 reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 
-# Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
-reGenderSuffix = re.compile(r'\^[MmFfNn]')
-
-# Matches the 2-letter language prefix at the start of a filename, such as 'pl_itemnames.dat' or 'en.lang'
-reFilenamePrefix = re.compile(r'^([a-z]{2})[_\.]', re.IGNORECASE)
-
-# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
-reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
-
-# Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
-reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
-
-# Matches lines in the format {{position-itemId-count}}string_text from itemnames .txt files
-reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
-
+# Matches a resource name ID in the format sectionId-sectionIndex-stringIndex
 reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
+
+# Matches tagged lang entries with optional chunk index after colon
+# Group 1: stringId as "sectionId-sectionIndex-stringIndex"
+# Group 2 (optional): chunk index (e.g., ":1", ":2", etc.)
+# Group 3: the actual translated or source text string
+reLangChunkedString = re.compile(r'\{\{(\d+-\d+-\d+)(?::(\d+))?\}\}(.*)')
 
 # Global Dictionaries ---------------------------------------------------------
 textUntranslatedLiveDict = {}
@@ -906,7 +914,7 @@ def writeLangFile(languageFileName, fileIndexes, fileStrings):
 
 
 @mainFunction
-def rebuildLangFileWithPointers(inputLangFile):
+def rebuildLangFileFromLangFile(inputLangFile):
     """
     Reads a language file, identifies duplicate strings, and ensures that repeated strings
     share the same offset in the output. This rebuilds the language file so that identical
@@ -932,20 +940,64 @@ def rebuildLangFileWithPointers(inputLangFile):
     print("Optimized file written to: {}".format(output_filename))
 
 
+import section_constants as section
+
+
 def processSectionIDs(currentFileIndexes, outputFileName):
     numIndexes = currentFileIndexes['numIndexes']
     currentSection = None
-    sectionCount = 0
-    with open(outputFileName, 'w') as sectionOut:
-        for index in range(numIndexes):
-            currentIndex = currentFileIndexes[index]
-            sectionId = currentIndex['sectionId']
-            if sectionId != currentSection:
-                sectionCount += 1
-                sectionOut.write(
-                    f"    'section_unknown_{sectionCount}': {{'sectionId': {sectionId}, 'sectionName': 'section_unknown_{sectionCount}'}},\n"
+    sectionCount = 1
+    section_lines = []
+
+    # Build lookup of known sectionId -> name
+    known_names = {
+        v['sectionId']: k
+        for k, v in section.section_info.items()
+        if not k.startswith("section_unknown_")
+    }
+
+    current_string_count = 0
+    current_max_length = 0
+
+    for index in range(numIndexes):
+        currentIndex = currentFileIndexes[index]
+        sectionId = currentIndex['sectionId']
+        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(
+            currentIndex['string'])
+        stringLength = len(stringValue)
+
+        if sectionId != currentSection:
+            # Save previous section info
+            if currentSection is not None:
+                known_key = known_names.get(currentSection)
+                name = known_key if known_key else f"section_unknown_{sectionCount}"
+                section_lines.append(
+                    f"    '{name}': {{'sectionId': {currentSection}, 'sectionName': '{name}', 'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}}},"
                 )
-                currentSection = sectionId
+                if not known_key:
+                    sectionCount += 1
+
+            # Start new section
+            currentSection = sectionId
+            current_string_count = 1
+            current_max_length = stringLength
+        else:
+            current_string_count += 1
+            current_max_length = max(current_max_length, stringLength)
+
+    # Final section
+    if currentSection is not None:
+        known_key = known_names.get(currentSection)
+        name = known_key if known_key else f"section_unknown_{sectionCount}"
+        section_lines.append(
+            f"    '{name}': {{'sectionId': {currentSection}, 'sectionName': '{name}', 'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}}},"
+        )
+
+    # Write output Python file
+    with open(outputFileName, 'w', encoding='utf-8') as sectionOut:
+        sectionOut.write("section_info = {\n")
+        sectionOut.write("\n".join(section_lines))
+        sectionOut.write("\n}\n")
 
 
 @mainFunction
@@ -959,11 +1011,11 @@ def build_section_constants(currentLanguageFile):
         currentLanguageFile (str): Path to the input .lang file.
 
     Output:
-        section_constants_output.py
+        section_constants_output.py (ready to import as a Python file)
     """
     currentFileIndexes, currentFileStrings = readLangFile(currentLanguageFile)
     outputFileName = "section_constants_output.py"
-    processSectionIDs(outputFileName, currentFileIndexes)
+    processSectionIDs(currentFileIndexes, outputFileName)
     print("Section constants written to:", outputFileName)
 
 
@@ -1107,17 +1159,54 @@ def combineClientFiles(client_filename, pregame_filename):
 
 
 @mainFunction
-def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBaseEnglish=False, inputEnglishFile=None):
+def find_long_po_entries(po_file, limit=512):
+    po = polib.pofile(po_file)
+    for entry in po:
+        if len(entry.msgid) > limit:
+            print(f"Long msgid ({len(entry.msgid)} chars) at key: {entry.msgctxt}")
+        if len(entry.msgstr) > limit:
+            print(f"Long msgstr ({len(entry.msgstr)} chars) at key: {entry.msgctxt}")
+
+
+def split_if_long(text, max_len=512):
+    if len(text) <= max_len:
+        return [text], 1
+
+    bi = BreakIterator.createWordInstance(Locale.getUS())
+    bi.setText(text)
+    breaks = list(bi)
+
+    chunks = []
+    last = 0
+    for i in range(1, len(breaks)):
+        if breaks[i] - last > max_len:
+            # Backtrack to last valid break before max_len
+            chunk = text[last:breaks[i - 1]]
+            chunks.append(chunk)
+            last = breaks[i - 1]
+    chunks.append(text[last:])
+    return chunks, len(chunks)
+
+
+@mainFunction
+def createPoFileFromEsoUI(inputFile, inputEnglishFile=None, isBaseEnglish=False):
     """
     Converts an ESO .str file into a .po file, using English as fallback if necessary.
 
     Args:
-        inputFile (str): Path to the translated or base English .str file.
-        lang (str): Language code for the PO file metadata.
-        outputFile (str): Output PO file name.
-        isBaseEnglish (bool): If True, produces empty msgstr entries.
+        inputFile (str): Path to the translated or English .str file.
         inputEnglishFile (str, optional): Path to English .str file to use for msgid fallback (required if isBaseEnglish=False).
+        isBaseEnglish (bool): If True, produces empty msgstr entries.
     """
+    import os
+
+    # Auto-detect language and output name
+    basename = os.path.basename(inputFile)
+    lang_match = re.match(r"([a-z]{2})_", basename)
+    lang = lang_match.group(1) if lang_match else "xx"
+    suffix = os.path.splitext(basename)[0].split("_", 1)[-1]
+    outputFile = f"{lang}_client_{suffix}.po"
+
     if not isBaseEnglish and inputEnglishFile is None:
         print("Error: inputEnglishFile is required if isBaseEnglish is False.")
         return
@@ -1127,10 +1216,12 @@ def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBase
     if inputEnglishFile:
         with open(inputEnglishFile, 'r', encoding='utf-8') as f_en:
             for line in f_en:
+                if reFontTag.match(line):
+                    continue
                 m = reClientUntaged.match(line)
                 if m:
                     k, v = m.group(1), m.group(2)
-                    english_map[k] = bytes(v, 'utf-8').decode('unicode_escape')
+                    english_map[k] = v
 
     # Load current language strings (either English or translated)
     translated_map = {}
@@ -1141,7 +1232,7 @@ def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBase
             m = reClientUntaged.match(line)
             if m:
                 k, v = m.group(1), m.group(2)
-                translated_map[k] = bytes(v, 'utf-8').decode('unicode_escape')
+                translated_map[k] = v
 
     # Create PO file
     po = polib.POFile()
@@ -1153,7 +1244,11 @@ def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBase
     keys = set(english_map if not isBaseEnglish else translated_map)
     for key in sorted(keys):
         msgid = english_map.get(key, translated_map.get(key, ""))
-        msgstr = "" if isBaseEnglish else translated_map.get(key, msgid)
+        raw_msgstr = translated_map.get(key, "")
+
+        msgstr = "" if isBaseEnglish else (
+            raw_msgstr if raw_msgstr and raw_msgstr != msgid else ""
+        )
 
         entry = polib.POEntry(
             msgctxt=key,
@@ -1163,7 +1258,7 @@ def createPoFileFromEsoUI(inputFile, lang="en", outputFile="messages.po", isBase
         po.append(entry)
 
     po.save(outputFile)
-    print("Done. Created .po file: {}".format(outputFile))
+    print(f"Done. Created .po file: {outputFile}")
 
 
 @mainFunction
@@ -1476,38 +1571,52 @@ def convertLangToYaml(input_txt, output_yaml=None):
 
 
 @mainFunction
-def convertLangToPo(input_txt, output_po=None):
+def convertLangPairToPo(translated_txt, english_txt):
     """
-    Convert ESO lang-formatted text ({{sectionId-sectionIndex-stringIndex:}}Text) into a Weblate-compatible PO file.
+    Converts two tagged ESO lang files ({{key:}}Text format) into a .po file.
 
     Args:
-        input_txt (str): Input filename like '70901198.txt'.
-        output_po (str, optional): Output PO filename. If not provided, derived from input filename.
+        translated_txt (str): Translated tagged file (e.g., kr_tagged_kr.txt).
+        english_txt (str): English tagged file (e.g., en_tagged.txt).
 
     Writes:
-        A .po file with msgctxt as the lang key and empty msgstr values for translation.
+        A .po file named from the translated file (e.g., kr_tagged_kr_lang_file.po) with:
+            msgctxt = lang key (e.g., {{...}})
+            msgid = English text
+            msgstr = Translated text
     """
     po = polib.POFile()
 
-    if output_po is None:
-        base = os.path.splitext(os.path.basename(input_txt))[0]
-        output_po = "{}_weblate.po".format(base)
+    # Auto-generate output filename based on translated file
+    base = os.path.splitext(os.path.basename(translated_txt))[0]
+    output_po = f"{base}_lang_file.po"
 
-    with open(input_txt, 'r', encoding='utf8') as infile:
-        for line in infile:
-            match = reLangIndex.match(line.rstrip())
-            if match:
-                key = match.group(1)
-                text = match.group(2)
+    # Load English base
+    english_map = {}
+    with open(english_txt, 'r', encoding='utf-8') as f_en:
+        for line in f_en:
+            m = reLangIndex.match(line.strip())
+            if m:
+                key, text = m.group(1), m.group(2)
+                english_map[key] = text
+
+    # Load translated content and build .po entries
+    with open(translated_txt, 'r', encoding='utf-8') as f_trans:
+        for line in f_trans:
+            m = reLangIndex.match(line.strip())
+            if m:
+                key, trans_text = m.group(1), m.group(2)
+                eng_text = english_map.get(key, "")
+
                 entry = polib.POEntry(
                     msgctxt=key,
-                    msgid=text,
-                    msgstr=""
+                    msgid=eng_text,
+                    msgstr=trans_text
                 )
                 po.append(entry)
 
     po.save(output_po)
-    print("PO output written to {}".format(output_po))
+    print(f"PO output written to: {output_po}")
 
 
 @mainFunction
@@ -1628,7 +1737,7 @@ def calculate_similarity_ratio(text1, text2):
 
 
 @mainFunction
-def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile="output.txt"):
+def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile):
     """
     Import a translated section into a full language file by matching tagged keys.
 
@@ -1653,6 +1762,12 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile=
         - It performs exact key matches using the part inside the double curly braces.
         - Unmatched lines are written through unchanged.
     """
+    basename = os.path.basename(fullLangFile)
+    match = reFilenamePrefix.match(basename)
+    prefix = match.group(1) if match else "xx"  # fallback prefix
+    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]  # e.g., "client" or "pregame"
+    output_filename = f"{prefix}_output_{suffix}.txt"
+
     textTranslatedDict.clear()
 
     # Read the translated section file into the global dict
@@ -1664,7 +1779,7 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile=
                 textTranslatedDict[key] = value.rstrip("\n")
 
     # Read the full lang file and replace lines with translated ones
-    with open(fullLangFile, 'r', encoding="utf8") as full, open(outputLangFile, 'w', encoding="utf8") as out:
+    with open(fullLangFile, 'r', encoding="utf8") as full, open(output_filename, 'w', encoding="utf8") as out:
         for line in full:
             m = reLangIndex.match(line)
             if m:
@@ -1673,7 +1788,7 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile, outputLangFile=
                     line = "{{{{{}:}}}}{}\n".format(key, textTranslatedDict[key])
             out.write(line)
 
-    print("Merged translations from {} into {} → {}".format(sectionLangFile, fullLangFile, outputLangFile))
+    print("Merged translations from {} into {} → {}".format(sectionLangFile, fullLangFile, output_filename))
 
 
 @mainFunction
@@ -1700,6 +1815,14 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
     - Compares the PTS and live texts to determine if translation changes are needed.
     - Writes the output to "output.txt" with potential new translations and to "verify_output.txt" for verification purposes.
     """
+    # Generate a dynamic output filename from the translated string file
+    basename = os.path.basename(translated_tagged_text)
+    match = reFilenamePrefix.match(basename)
+    prefix = match.group(1) if match else "xx"  # fallback prefix
+    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]  # e.g., "client" or "pregame"
+    output_filename = f"{prefix}_output_{suffix}.txt"
+    output_verify_filename = f"{prefix}_verify_output_{suffix}.txt"
+
     # Get Previous Translation ------------------------------------------------------
     readTaggedLangFile(translated_tagged_text, textTranslatedDict)
     print("Processed Translated Text")
@@ -1711,8 +1834,8 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
     print("Processed Current Text")
     # Compare PTS with Live text, write output -----------------------------------------
     print("Begining Comparison")
-    with open("output.txt", 'w', encoding="utf8") as out:
-        with open("verify_output.txt", 'w', encoding="utf8") as verifyOut:
+    with open(output_filename, 'w', encoding="utf8") as out:
+        with open(output_verify_filename, 'w', encoding="utf8") as verifyOut:
             for key in textUntranslatedPTSDict:
                 # Retrieve source and translated text entries by ID
                 translatedText = textTranslatedDict.get(key)
@@ -1773,6 +1896,9 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
                         verifyOut.write('{{{}}}:{{{}}}\n'.format(textsAreSimilar, lineOut))
 
                 out.write(lineOut)
+
+    print("Done. Output written to {}".format(output_filename))
+    print("Done. Output for verification written to {}".format(output_verify_filename))
 
 
 @mainFunction
