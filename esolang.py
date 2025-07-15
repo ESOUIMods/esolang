@@ -993,9 +993,6 @@ def rebuildLangFileFromLangFile(inputLangFile):
     print("Optimized file written to: {}".format(output_filename))
 
 
-import section_constants as section
-
-
 def processSectionIDs(currentFileIndexes, outputFileName):
     numIndexes = currentFileIndexes['numIndexes']
     currentSection = None
@@ -1015,8 +1012,7 @@ def processSectionIDs(currentFileIndexes, outputFileName):
     for index in range(numIndexes):
         currentIndex = currentFileIndexes[index]
         sectionId = currentIndex['sectionId']
-        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(
-            currentIndex['string'])
+        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(currentIndex['string'])
         stringLength = len(stringValue)
 
         if sectionId != currentSection:
@@ -1025,7 +1021,7 @@ def processSectionIDs(currentFileIndexes, outputFileName):
                 known_key = known_names.get(currentSection)
                 name = known_key if known_key else f"section_unknown_{sectionCount}"
                 section_lines.append(
-                    f"    '{name}': {{'sectionId': {currentSection}, 'sectionName': '{name}', 'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}}},"
+                    f"    '{name}': {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionId': {currentSection}, 'sectionName': '{name}'}},"
                 )
                 if not known_key:
                     sectionCount += 1
@@ -1043,7 +1039,7 @@ def processSectionIDs(currentFileIndexes, outputFileName):
         known_key = known_names.get(currentSection)
         name = known_key if known_key else f"section_unknown_{sectionCount}"
         section_lines.append(
-            f"    '{name}': {{'sectionId': {currentSection}, 'sectionName': '{name}', 'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}}},"
+            f"    '{name}': {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionId': {currentSection}, 'sectionName': '{name}'}},"
         )
 
     # Write output Python file
@@ -1051,6 +1047,7 @@ def processSectionIDs(currentFileIndexes, outputFileName):
         sectionOut.write("section_info = {\n")
         sectionOut.write("\n".join(section_lines))
         sectionOut.write("\n}\n")
+
 
 
 @mainFunction
