@@ -8,9 +8,6 @@ import struct
 import codecs
 import chardet
 from difflib import SequenceMatcher
-import ruamel.yaml
-from ruamel.yaml.scalarstring import PreservedScalarString
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
 import polib
 import xml.etree.ElementTree as ET
@@ -99,7 +96,7 @@ reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
 reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
-reGenderSuffix = re.compile(r'\^[MmFfNn]')
+reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
 
 # Matches a language index in the format {{identifier:}}text
 reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
@@ -124,6 +121,8 @@ reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 
 # Matches a resource name ID in the format sectionId-sectionIndex-stringIndex
 reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
+
+reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 
 # Matches tagged lang entries with optional chunk index after colon
 # Group 1: stringId as "sectionId-sectionIndex-stringIndex"
@@ -408,8 +407,8 @@ def addIndexToLangFile(txtFilename, idFilename):
 
     with open(output_filename, 'w', encoding="utf8", newline='\n') as output:
         for i in range(len(textLines)):
-            lineOut = '{{{{{}:}}}}'.format(idLines[i]) + textLines[i]
-            output.write(lineOut + '\n')
+            lineOut = f'{{{{{idLines[i]}:}}}}{textLines[i]}\n'
+            output.write(lineOut)
 
     print(f"Output written to: {output_filename}")
 
@@ -469,8 +468,8 @@ def removeIndexToLangFile(txtFilename):
 
     with open(output_filename, 'w', encoding="utf8", newline='\n') as output:
         for line in textLines:
-            lineOut = '{}\n'.format(line)
-            output.write(lineOut + '\n')
+            lineOut = f'{line}\n'
+            output.write(lineOut)
 
 
 @mainFunction
@@ -550,8 +549,8 @@ def koreanToEso(txtFilename):
                     else:
                         temp = temp - 0x3F800
                 char = temp.to_bytes(shift, byteorder='big')
-                outText = codecs.decode(char, 'UTF-8')
-                out.write(outText + '\n')
+                outText = f'{codecs.decode(char, "UTF-8")}\n'
+                out.write(outText)
 
     print(f"Output written to: {output_filename}")
 
@@ -587,8 +586,6 @@ def esoToKorean(txtFilename):
         나는 가고 싶다
         ```
     """
-    import os
-
     basename = os.path.basename(txtFilename)
     if "_" in basename and "." in basename:
         prefix = basename.split("_", 1)[0]
@@ -637,8 +634,8 @@ def esoToKorean(txtFilename):
                     else:
                         temp = temp + 0x3F800
                 char = temp.to_bytes(shift, byteorder='big')
-                outText = codecs.decode(char, 'UTF-8')
-                out.write(outText + '\n')
+                outText = f'{codecs.decode(char, "UTF-8")}\n'
+                out.write(outText)
 
     print(f"Output written to: {output_filename}")
 
@@ -758,7 +755,7 @@ def addIndexToEosui(txtFilename):
 
     with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for line in textLines:
-            out.write(line + '\n')
+            out.write(f"{line}\n")
 
 
 @mainFunction
@@ -822,7 +819,7 @@ def removeIndexFromEosui(txtFilename):
 
     with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for lineOut in textLines:
-            out.write(lineOut + '\n')
+            out.write(f"{lineOut}\n")
 
 
 def readNullStringByChar(offset, start, file):
@@ -1012,7 +1009,8 @@ def processSectionIDs(currentFileIndexes, outputFileName):
     for index in range(numIndexes):
         currentIndex = currentFileIndexes[index]
         sectionId = currentIndex['sectionId']
-        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(currentIndex['string'])
+        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(
+            currentIndex['string'])
         stringLength = len(stringValue)
 
         if sectionId != currentSection:
@@ -1049,7 +1047,6 @@ def processSectionIDs(currentFileIndexes, outputFileName):
         sectionOut.write("\n}\n")
 
 
-
 @mainFunction
 def build_section_constants(currentLanguageFile):
     """
@@ -1070,17 +1067,19 @@ def build_section_constants(currentLanguageFile):
 
 
 @mainFunction
-def extractSectionEntries(langFile, section_arg, useName=True):
+def extractSectionEntries(langFile, section_arg, output_filename=None, output_folder=None, useName=True):
     """
     Extracts all entries from a language file for a specific section (by name or ID).
 
     Args:
         langFile (str): The .lang file to read (e.g., en.lang).
         section_arg (str|int): Either the section name (e.g., "lorebook_names") or numeric section ID (e.g., 3427285).
-        useName (bool): If True, filenames will include both ID and section name (if known). Default is False.
+        useName (bool): If True, filenames will include both ID and section name (if known). Default is True.
+        output_folder (str): Optional. Folder to save output files in (e.g., "tagged_text").
+        output_filename (str): Optional. Base name for the output file (without .txt extension).
 
     Writes:
-        <sectionId>.txt, <sectionId>_lorebook_names.txt, or <sectionId>_lorebook_names_pl.txt depending on input.
+        Output file in the form <output_filename>.txt or <sectionId>_sectionname_lang.txt.
     """
     try:
         section_id = int(section_arg)
@@ -1088,27 +1087,38 @@ def extractSectionEntries(langFile, section_arg, useName=True):
     except ValueError:
         section_id = get_section_id(section_arg)
         if section_id is None:
-            print("Error: Unknown section name '{}'".format(section_arg))
+            print(f"Error: Unknown section name '{section_arg}'")
             return
         section_key = section_arg
 
     # Determine language suffix like _pl or _en based on filename
     basename = os.path.basename(langFile)
     lang_suffix = ""
+    lang_prefix = ""
     lang_match = reFilenamePrefix.match(basename.lower())
     if lang_match:
         lang_code = lang_match.group(1)
-        lang_suffix = "_" + lang_code
+        lang_suffix = f"_{lang_code}"
+        lang_prefix = f"{lang_code}_"
 
     # Determine output filename
-    if useName and section_key and not re.match(r'section_unknown_\d+$', section_key):
-        output_name = "{}_{}{}.txt".format(section_id, section_key, lang_suffix)
+    if output_filename:
+        filename = f"{output_filename}.txt"
+    elif useName and section_key and not re.match(r'section_unknown_\d+$', section_key):
+        filename = f"{section_id}_{section_key}{lang_suffix}.txt"
     else:
-        output_name = "{}{}.txt".format(section_id, lang_suffix)
+        filename = f"{lang_prefix}section_{section_id}.txt"
+
+    # Create folder path if needed
+    if output_folder:
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, filename)
+    else:
+        output_path = filename
 
     fileIndexes, fileStrings = readLangFile(langFile)
 
-    with open(output_name, "w", encoding="utf8") as out:
+    with open(output_path, "w", encoding="utf8", newline='\n') as out:
         for i in range(fileIndexes['numIndexes']):
             entry = fileIndexes[i]
             if entry['sectionId'] == section_id:
@@ -1119,11 +1129,32 @@ def extractSectionEntries(langFile, section_arg, useName=True):
                 preserved_nbsp = preserve_nbsp_bytes(raw_bytes)
                 escaped_bytes = preserve_escaped_sequences_bytes(preserved_nbsp)
                 utf8_string = bytes(escaped_bytes).decode("utf8", errors="replace")
-                formatted = "{{{{{}-{}-{}:}}}}{}\n".format(secId, secIdx, strIdx, utf8_string)
+                formatted = f"{{{{{secId}-{secIdx}-{strIdx}:}}}}{utf8_string}"
                 lineOut = restore_escaped_sequences(formatted)
-                out.write(lineOut)
+                out.write(f"{lineOut}\n")
 
-    print("Done. Extracted entries from section {} to {}".format(section_id, output_name))
+    print(f"Done. Extracted entries from section {section_id} to {output_path}")
+
+
+@mainFunction
+def extractAllSections(langFile):
+    """
+    Extract all known sections from a .lang file using section_info
+    and write each one to tagged_text/<sectionId><lang_suffix>.txt.
+
+    Args:
+        langFile (str): Path to the input .lang file (e.g., 'en_cur.lang').
+    """
+    for section_key, section_data in section.section_info.items():
+        section_id = section_data['sectionId']
+        print(f"Processing section: {section_id}...")
+        extractSectionEntries(
+            langFile=langFile,
+            section_arg=section_id,
+            output_filename=None,
+            output_folder="tagged_text",
+            useName=False
+        )
 
 
 def processEosuiTextFile(filename, text_dict):
@@ -1197,15 +1228,15 @@ def combineClientFiles(client_filename, pregame_filename):
     mergedDict.update(textClientDict)
     mergedDict.update(textPregameDict)  # pregame entries will not overwrite existing ones
 
-    with open("output.txt", 'w', encoding="utf8") as out:
+    with open("output.txt", 'w', encoding="utf8", newline='\n') as out:
         for conIndex, conText in mergedDict.items():
             if conText == "":
-                lineOut = '[{}] = ""\n'.format(conIndex)
+                lineOut = f'[{conIndex}] = ""'
             else:
                 escaped = preserve_escaped_sequences(conText)
-                formatted = '[{}] = "{}"\n'.format(conIndex, escaped)
+                formatted = f'[{conIndex}] = "{escaped}"'
                 lineOut = restore_escaped_sequences(formatted)
-            out.write(lineOut)
+            out.write(f"{lineOut}\n")
 
 
 @mainFunction
@@ -1312,315 +1343,6 @@ def createPoFileFromEsoUI(inputFile, inputEnglishFile=None, isBaseEnglish=False)
 
 
 @mainFunction
-def createEsoUIWeblateFile(inputFile, lang="en", outputFile=None, component=None):
-    """
-    Generate a YAML file for Weblate translation.
-
-    This function reads a text file containing ESO string definitions and generates
-    a single YAML file structured for use with Weblate.
-
-    Args:
-        inputFile (str): The filename of the text file containing ESO strings.
-        lang (str): Language code used for the output file name (e.g., "en", "tr"). Default is "en".
-        outputFile (str, optional): The filename of the output YAML file. If None, defaults to <basename>.<lang>.yaml.
-        component (str, optional): Optional top-level key (e.g., "client"). If None, the output will be flat.
-
-    Notes:
-        This function extracts constant entries using the reClientUntaged pattern from the input file,
-        builds a dictionary of translations, and writes them in YAML format suitable for Weblate.
-
-    Example:
-        Given 'output.txt':
-        ```
-        [SI_MY_CONSTANT] = "My Constant Text"
-        [SI_CONSTANT] = "Some Constant Text"
-        ```
-
-        Calling `createWeblateFile('output.txt', lang='tr', component='client')` will produce:
-        - 'output.tr.yaml':
-          ```
-          client:
-            SI_MY_CONSTANT: "My Constant Text"
-            SI_CONSTANT: "Some Constant Text"
-          ```
-    """
-    if outputFile is None:
-        base = os.path.splitext(os.path.basename(inputFile))[0]
-        outputFile = "{}.{}.yaml".format(base, lang)
-
-    try:
-        with open(inputFile, 'r', encoding="utf8") as textIns:
-            translations = {}
-            for line in textIns:
-                maEmptyString = reEmptyString.match(line)
-                maClientUntaged = reClientUntaged.match(line)
-                if maEmptyString:
-                    conIndex = maEmptyString.group(1)
-                    conText = ''
-                    translations[conIndex] = DoubleQuotedScalarString(conText)
-                elif maClientUntaged:
-                    conIndex = maClientUntaged.group(1)
-                    conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
-                    translations[conIndex] = DoubleQuotedScalarString(conText)
-    except FileNotFoundError:
-        print("{} not found. Aborting.".format(inputFile))
-        return
-
-    if not translations:
-        print("No translations found in {}. Aborting.".format(inputFile))
-        return
-
-    yaml = ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    yaml.width = float("inf")
-
-    with open(outputFile, 'w', encoding="utf8") as weblate_file:
-        if component:
-            yaml.dump({component: translations}, weblate_file)
-        else:
-            yaml.dump(translations, weblate_file)
-
-    print("Generated Weblate file: {}".format(outputFile))
-
-
-@mainFunction
-def importClientTranslations(inputYaml, inputEnglishFile, inputLocalizedFile, langValue):
-    """
-    Import translated text from localized and English client files and generate an updated YAML.
-
-    This function reads untranslated text from the specified inputEnglishFile (e.g., en_client.str)
-    and translated text from the inputLocalizedFile (e.g., tr_client.str or ua_client.str). If an existing
-    YAML file is present, it is used to seed the initial data. Otherwise, a fresh YAML file is generated.
-
-    Args:
-        inputYaml (str): The filename of the YAML file to update. If the file does not exist, it will be created.
-        inputEnglishFile (str): The filename of the English untranslated client or pregame file.
-        inputLocalizedFile (str): The filename of the localized client or pregame file to extract translations from.
-        langValue (str): The language name to use as the field name in the YAML (e.g., "turkish").
-
-    Notes:
-        This function ensures that only strings currently present in the English file are included in the output.
-        If a key in the English file has no corresponding translation in the localized file, it will be output
-        with an empty string. Obsolete entries (ones no longer in the English file) are discarded.
-
-    Example:
-        Calling `importClientTranslations('translations.yaml', 'en_client.str', 'tr_client.str', 'turkish')` will produce:
-        ```
-        SI_MY_CONSTANT:
-          english: "My Constant Text"
-          turkish: "Benim Sabit Metnim"
-        SI_NEW_CONSTANT:
-          english: "New String"
-          turkish: ""
-        ```
-        Updated translations saved to translations_updated.yaml.
-    """
-    translations = {}
-
-    yaml = ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    yaml.width = float("inf")
-
-    # Load from inputYaml if it exists
-    if os.path.isfile(inputYaml):
-        with open(inputYaml, 'r', encoding="utf8") as yaml_file:
-            yaml_data = yaml.load(yaml_file) or {}
-        for conIndex, conText in yaml_data.items():
-            translations[conIndex] = {
-                'english': conText.get('english', ''),
-                langValue: conText.get(langValue, ''),
-            }
-
-    # Read English .str file and populate or update base entries
-    with open(inputEnglishFile, 'r', encoding="utf8") as en_file:
-        for line in en_file:
-            ma = reClientUntaged.match(line)
-            if ma:
-                key = ma.group(1)
-                value = ma.group(2)
-                if key not in translations:
-                    translations[key] = {}
-                translations[key]['english'] = value
-                if langValue not in translations[key]:
-                    translations[key][langValue] = ""
-
-    # Read localized .str file and populate only existing keys
-    with open(inputLocalizedFile, 'r', encoding="utf8") as loc_file:
-        for line in loc_file:
-            ma = reClientUntaged.match(line)
-            if ma:
-                key = ma.group(1)
-                value = ma.group(2)
-                if key in translations:
-                    if value != translations[key].get('english', ''):
-                        translations[key][langValue] = value
-
-    # Restrict output to keys that still exist in the English file
-    filtered_translations = {
-        k: v for k, v in translations.items() if 'english' in v
-    }
-
-    # Wrap values with DoubleQuotedScalarString
-    for key, fields in filtered_translations.items():
-        fields['english'] = DoubleQuotedScalarString(fields['english'])
-        fields[langValue] = DoubleQuotedScalarString(fields[langValue])
-
-    # Write updated YAML output
-    output_filename = os.path.splitext(inputYaml)[0] + "_updated.yaml"
-    with open(output_filename, 'w', encoding="utf8") as out_file:
-        yaml.dump(filtered_translations, out_file)
-
-    print("Updated translations saved to {}.".format(output_filename))
-
-
-@mainFunction
-def createWeblateMonolingualYamls(input_en, input_translated=None, langTag=None, section_name=None):
-    """
-    Generate two monolingual Weblate-compatible YAML files named after section_name.
-
-    Args:
-        input_en (str): Path to the English source file (Lua-style).
-        input_translated (str, optional): Path to the translated file (Lua-style). If None, translation falls back to English.
-        langTag (str): Language code for the translation (e.g., 'kr', 'tr', 'uk').
-        section_name (str): YAML top-level key and file prefix (e.g., 'client', 'pregame').
-    """
-    if not langTag:
-        print("Missing langTag (e.g., 'kr', 'tr'). Aborting.")
-        return
-    if not section_name:
-        print("Missing section_name (e.g., 'client', 'pregame'). Aborting.")
-        return
-
-    def parse_lua_file(path):
-        entries = {}
-        for line in open(path, encoding="utf-8"):
-            ma = reClientUntaged.match(line)
-            if ma:
-                key, val = ma.group(1), ma.group(2)
-                entries[key] = val
-        return entries
-
-    en_data = parse_lua_file(input_en)
-    tr_data = parse_lua_file(input_translated) if input_translated else {}
-
-    out_en_file = "{}.en.yaml".format(section_name)
-    out_tr_file = "{}.{}.yaml".format(section_name, langTag)
-
-    yaml = ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    yaml.width = float("inf")
-
-    def write_yaml(filepath, dictionary):
-        data = {section_name: {}}
-        for key, val in sorted(dictionary.items()):
-            data[section_name][key] = DoubleQuotedScalarString(val)
-        with open(filepath, "w", encoding="utf-8") as f:
-            yaml.dump(data, f)
-
-    write_yaml(out_en_file, en_data)
-
-    merged_tr_data = {
-        key: tr_data.get(key, "") or en_data.get(key, "")
-        for key in en_data
-    }
-    write_yaml(out_tr_file, merged_tr_data)
-
-    print("Wrote Weblate YAML files:")
-    print("  - {}".format(out_en_file))
-    print("  - {}".format(out_tr_file))
-
-
-@mainFunction
-def processTranslationFiles(inputYaml, clientStrings, pregameStrings, languageKey):
-    """
-    Process translation files using the provided YAML file and create output files.
-
-    This function reads the client and pregame strings files, processes the translations
-    using the provided YAML file, and generates separate output files for both client and
-    pregame strings with the translated values if available.
-
-    Args:
-        inputYaml (str): The filename of the YAML file containing translations.
-        clientStrings (str): The filename of the client strings file (e.g., tr_client.str).
-        pregameStrings (str): The filename of the pregame strings file (e.g., tr_pregame.str).
-        languageKey (str): The key corresponding to the desired language in the translations.
-    """
-    if not isinstance(languageKey, str):
-        print("languageKey must be a string. Aborting.")
-        return
-
-    clientStringsDict = {}
-    pregameStringsDict = {}
-    processEosuiTextFile(clientStrings, clientStringsDict)
-    processEosuiTextFile(pregameStrings, pregameStringsDict)
-
-    translations = {}
-    yaml = ruamel.yaml.YAML()
-    yaml.preserve_quotes = True
-    yaml.width = float("inf")
-
-    try:
-        with open(inputYaml, 'r', encoding='utf8') as yaml_file:
-            translations = yaml.load(yaml_file)
-    except FileNotFoundError:
-        print("{} not found. Aborting.".format(inputYaml))
-        return
-
-    client_output_path = "client.{}.output.txt".format(languageKey)
-    pregame_output_path = "pregame.{}.output.txt".format(languageKey)
-
-    with open(client_output_path, 'w', encoding='utf8') as client_output_file:
-        for key, value in clientStringsDict.items():
-            output = value
-            if key in translations and languageKey in translations[key]:
-                output = translations[key][languageKey]
-            escaped = preserve_escaped_sequences(output)
-            formatted = '[{}] = "{}"\n'.format(key, escaped)
-            restored = restore_escaped_sequences(formatted)
-            client_output_file.write(restored)
-
-    with open(pregame_output_path, 'w', encoding='utf8') as pregame_output_file:
-        for key, value in pregameStringsDict.items():
-            output = value
-            if key in translations and languageKey in translations[key]:
-                output = translations[key][languageKey]
-            escaped = preserve_escaped_sequences(output)
-            formatted = '[{}] = "{}"\n'.format(key, escaped)
-            restored = restore_escaped_sequences(formatted)
-            pregame_output_file.write(restored)
-
-    print("Wrote client output to: {}".format(client_output_path))
-    print("Wrote pregame output to: {}".format(pregame_output_path))
-
-
-@mainFunction
-def convertLangToYaml(input_txt, output_yaml=None):
-    """
-    Convert ESO lang-formatted text ({{sectionId-sectionIndex-stringIndex:}}Text) into a Weblate-compatible YAML file.
-
-    Args:
-        input_txt (str): Input filename like '70901198.txt'.
-        output_yaml (str, optional): Output YAML filename. If not provided, derived from input filename.
-
-    Writes:
-        A .yaml file where each entry uses the key from the lang index and a quoted string.
-    """
-    if output_yaml is None:
-        base = os.path.splitext(os.path.basename(input_txt))[0]
-        output_yaml = "{}_weblate.yaml".format(base)
-
-    with open(input_txt, 'r', encoding='utf8') as infile, open(output_yaml, 'w', encoding='utf8') as outfile:
-        for line in infile:
-            match = reLangIndex.match(line.rstrip())
-            if match:
-                key = match.group(1)
-                text = match.group(2).replace('"', '\\"')
-                outfile.write('{}: "{}"\n'.format(key, text))
-
-    print("YAML output written to {}".format(output_yaml))
-
-
-@mainFunction
 def convertLangPairToPo(translated_txt, english_txt):
     """
     Converts two tagged ESO lang files ({{key:}}Text format) into a .po file.
@@ -1687,7 +1409,7 @@ def mergeItemnamesToPo(english_txt, translated_txt, output_po=None):
     # Use fallback name if output not specified
     if output_po is None:
         base = os.path.splitext(os.path.basename(translated_txt))[0]
-        output_po = "{}_merged.po".format(base)
+        output_po = f"{base}_merged.po"
 
     # Load English
     english_map = {}
@@ -1695,7 +1417,7 @@ def mergeItemnamesToPo(english_txt, translated_txt, output_po=None):
         for line in f:
             match = reItemnameTagged.match(line.rstrip())
             if match:
-                key = "{{{{{}-{}-{}}}}}".format(match.group(1), match.group(2), match.group(3))
+                key = f"{{{{{match.group(1)}-{match.group(2)}-{match.group(3)}}}}}"
                 text = match.group(4)
                 english_map[key] = text
 
@@ -1705,7 +1427,7 @@ def mergeItemnamesToPo(english_txt, translated_txt, output_po=None):
         for line in f:
             match = reItemnameTagged.match(line.rstrip())
             if match:
-                key = "{{{{{}-{}-{}}}}}".format(match.group(1), match.group(2), match.group(3))
+                key = f"{{{{{match.group(1)}-{match.group(2)}-{match.group(3)}}}}}"
                 text = match.group(4)
                 translated_map[key] = text
 
@@ -1719,7 +1441,7 @@ def mergeItemnamesToPo(english_txt, translated_txt, output_po=None):
         po.append(entry)
 
     po.save(output_po)
-    print("Merged PO written to:", output_po)
+    print(f"Merged PO written to: {output_po}")
 
 
 def readTaggedLangFile(taggedFile, targetDict):
@@ -1737,52 +1459,38 @@ def cleanText(line):
         return None
 
     # Strip weird dots … or other chars
-    line = line.replace('…', '').replace('—', '').replace('â€¦', '')
+    line = line.replace('…', '').replace('—', '').replace('â€¦', '').replace('â€”', '')
 
-    # Remove unnecessary color tags
-    reColorTagError = re.compile(r'(\|c000000)(\|c[0-9a-zA-Z]{6,6})')
-    maColorTagError = reColorTagError.match(line)
-    if maColorTagError:
-        line = line.replace("|c000000", "")
+    # Remove black/hidden text color blocks entirely
+    reColorTagError = re.compile(r'\|c000000(.*?)\|r')
+    line = reColorTagError.sub('', line)
 
     return line
 
 
 def calculate_similarity_and_threshold(text1, text2):
-    reColorTag = re.compile(r'\|c[0-9a-zA-Z]{1,6}|\|r')
-    reControlChar = re.compile(r'\^f|\^n|\^F|\^N|\^p|\^P')
-
     if not text1 or not text2:
         return False
 
     subText1 = reColorTag.sub('', text1)
     subText2 = reColorTag.sub('', text2)
-    subText1 = reControlChar.sub('', subText1)
-    subText2 = reControlChar.sub('', subText2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
 
     similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
-
     return text1 == text2 or similarity_ratio > 0.6
 
 
 def calculate_similarity_ratio(text1, text2):
-    reColorTag = re.compile(r'\|c[0-9a-zA-Z]{1,6}|\|r')
-    reControlChar = re.compile(r'\^f|\^n|\^F|\^N|\^p|\^P')
-
-    # Check if either text1 or text2 is None
     if text1 is None or text2 is None:
         return False
 
-    # Remove color tags and control characters
     subText1 = reColorTag.sub('', text1)
     subText2 = reColorTag.sub('', text2)
-    subText1 = reControlChar.sub('', subText1)
-    subText2 = reControlChar.sub('', subText2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
 
-    # Calculate similarity ratio
     similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
-
-    # Return True only when similarity_ratio > 0.6
     return similarity_ratio > 0.6
 
 
@@ -1829,16 +1537,18 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile):
                 textTranslatedDict[key] = value.rstrip("\n")
 
     # Read the full lang file and replace lines with translated ones
-    with open(fullLangFile, 'r', encoding="utf8") as full, open(output_filename, 'w', encoding="utf8") as out:
-        for line in full:
-            m = reLangIndex.match(line)
-            if m:
-                key, _ = m.groups()
-                if key in textTranslatedDict:
-                    line = "{{{{{}:}}}}{}\n".format(key, textTranslatedDict[key])
-            out.write(line)
+    with open(fullLangFile, 'r', encoding="utf8") as full:
+        with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
+            for line in full:
+                m = reLangIndex.match(line)
+                if m:
+                    key, _ = m.groups()
+                    if key in textTranslatedDict:
+                        line = f"{{{{{key}:}}}}{textTranslatedDict[key]}"
+                line = line.rstrip()
+                out.write(f"{line}\n")
 
-    print("Merged translations from {} into {} → {}".format(sectionLangFile, fullLangFile, output_filename))
+    print(f"Merged translations from {sectionLangFile} into {fullLangFile} → {output_filename}")
 
 
 @mainFunction
@@ -1884,8 +1594,8 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
     print("Processed Current Text")
     # Compare PTS with Live text, write output -----------------------------------------
     print("Begining Comparison")
-    with open(output_filename, 'w', encoding="utf8") as out:
-        with open(output_verify_filename, 'w', encoding="utf8") as verifyOut:
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
+        with open(output_verify_filename, 'w', encoding="utf8", newline='\n') as verifyOut:
             for key in textUntranslatedPTSDict:
                 # Retrieve source and translated text entries by ID
                 translatedText = textTranslatedDict.get(key)
@@ -1936,23 +1646,25 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
                 if useTranslatedText:
                     lineOut = translatedText
 
-                lineOut = '{{{{{}:}}}}{}\n'.format(key, lineOut.rstrip())
+                lineOut = lineOut.rstrip()
+                lineOut = f"{{{{{key}:}}}}{lineOut}"
 
                 if writeOutput:
                     if translatedText is not None:
-                        verifyOut.write('T{{{{{}:}}}}{}\n'.format(key, translatedText.rstrip()))
-                        verifyOut.write('L{{{{{}:}}}}{}\n'.format(key, liveText.rstrip()))
-                        verifyOut.write('P{{{{{}:}}}}{}\n'.format(key, ptsText.rstrip()))
-                        verifyOut.write('{{{}}}:{{{}}}\n'.format(textsAreSimilar, lineOut))
+                        verifyOut.write(f"T{{{{{key}:}}}}{translatedText.rstrip()}\n")
+                        verifyOut.write(f"L{{{{{key}:}}}}{liveText.rstrip()}\n")
+                        verifyOut.write(f"P{{{{{key}:}}}}{ptsText.rstrip()}\n")
+                        verifyOut.write(f"{{{textsAreSimilar}}}:{{{lineOut}}}\n")
 
-                out.write(lineOut)
 
-    print("Done. Output written to {}".format(output_filename))
-    print("Done. Output for verification written to {}".format(output_verify_filename))
+                out.write(f"{lineOut}\n")
+
+    print(f"Done. Output written to {output_filename}")
+    print(f"Done. Output for verification written to {output_verify_filename}")
 
 
 @mainFunction
-def compareStrFilesForTranslation(translated_string_file, previous_english_string_file, current_english_string_file):
+def compareEsoUIFilesForTranslation(translated_string_file, previous_english_string_file, current_english_string_file):
     """Compare ESOUI Text Files with Existing Translations.
 
     This function reads three input ESOUI text files: translated_string_file, previous_english_string_file, and current_english_string_file,
@@ -1985,7 +1697,7 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
     # Read pts text ----------------------------------------------------
     processEosuiTextFile(current_english_string_file, textUntranslatedPTSDict)
     # --Write Output ------------------------------------------------------
-    with open(output_filename, 'w', encoding="utf8") as out:
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for key in textUntranslatedPTSDict:
             translatedText = textTranslatedDict.get(key)
             liveText = textUntranslatedLiveDict.get(key)
@@ -1993,8 +1705,7 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
             maEmptyString = reEmptyString.match(ptsText)
             if maEmptyString:
                 conIndex = maEmptyString.group(1)
-                lineOut = '[{}] = ""\n'.format(conIndex)
-                out.write(lineOut)
+                out.write(f'[{conIndex}] = ""\n')
                 continue
             hasExtendedChars = isTranslatedText(translatedText)
             hasTranslation = False
@@ -2012,11 +1723,11 @@ def compareStrFilesForTranslation(translated_string_file, previous_english_strin
                 outputText = translatedText
 
             escaped = preserve_escaped_sequences(outputText)
-            formatted = '[{}] = "{}"\n'.format(key, escaped)
+            formatted = f'[{key}] = "{escaped}"\n'
             restored = restore_escaped_sequences(formatted)
             out.write(restored)
 
-    print("Done. Output written to {}".format(output_filename))
+    print(f"Done. Output written to {output_filename}")
 
 
 @mainFunction
@@ -2038,26 +1749,21 @@ def generate_tagged_lang_text(input_lang_file):
     match = reFilenamePrefix.match(basename)
     prefix = match.group(1) if match else "xx"
     suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]
-    output_txt = "{}_tagged_{}.txt".format(prefix, suffix)
+    output_txt = f"{prefix}_tagged_{suffix}.txt"
 
-    with open(output_txt, 'w', encoding="utf-8") as out:
+    with open(output_txt, 'w', encoding="utf-8", newline='\n') as out:
         for index in range(currentFileIndexes["numIndexes"]):
             entry = currentFileIndexes[index]
             text = entry.get("string")
             if text:
                 preserved_nbsp = preserve_nbsp_bytes(text)
                 escaped = preserve_escaped_sequences_bytes(preserved_nbsp)
-                decoded = escaped.decode("utf-8", errors="replace")
-                formatted = "{{{{{}-{}-{}:}}}}{}\n".format(
-                    entry["sectionId"],
-                    entry["sectionIndex"],
-                    entry["stringIndex"],
-                    decoded.rstrip()
-                )
+                decoded = escaped.decode("utf-8", errors="replace").rstrip()
+                formatted = f"{{{{{entry['sectionId']}-{entry['sectionIndex']}-{entry['stringIndex']}:}}}}{decoded}"
                 lineOut = restore_escaped_sequences(formatted)
-                out.write(lineOut)
+                out.write(f"{lineOut}\n")
 
-    print("Tagged language text written to:", output_txt)
+    print(f"Tagged language text written to: {output_txt}")
 
 
 def read_tagged_text_to_dict(tagged_text_file):
@@ -2122,8 +1828,8 @@ def read_tagged_text_to_dict(tagged_text_file):
     fileIndexes["numSections"] = 2  # can be updated if needed
     fileStrings["stringCount"] = stringCount
 
-    print("String Count: {}".format(stringCount))
-    print("Number of Indexes: {}".format(index))
+    print(f"String Count: {stringCount}")
+    print(f"Number of Indexes: {index}")
     return fileIndexes, fileStrings
 
 
@@ -2145,13 +1851,13 @@ def rebuildLangFileFromTaggedText(input_tagged_file):
     basename = os.path.basename(input_tagged_file)
     prefix = basename.split("_", 1)[0]
     suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
-    output_filename = "{}_output_{}.lang".format(prefix, suffix)
+    output_filename = f"{prefix}_output_{suffix}.lang"
 
     currentFileIndexes, currentFileStrings = read_tagged_text_to_dict(input_tagged_file)
-    print("String Count: {}".format(currentFileStrings['stringCount']))
+    print(f"String Count: {currentFileStrings['stringCount']}")
     writeLangFile(output_filename, currentFileIndexes, currentFileStrings)
 
-    print("Optimized file written to: {}".format(output_filename))
+    print(f"Optimized file written to: {output_filename}")
 
 
 @mainFunction
@@ -2187,9 +1893,7 @@ def parse_xliff_to_dict(xliff_path, output_txt_path):
                 if current_resname and reResNameId.match(current_resname):
                     if current_state in ("translated", "final"):
                         sectionId, sectionIndex, stringIndex = reResNameId.match(current_resname).groups()
-                        output_line = "{{{{{}-{}-{}:}}}}{}".format(
-                            sectionId, sectionIndex, stringIndex, current_text
-                        )
+                        output_line = f"{{{{{sectionId}-{sectionIndex}-{stringIndex}:}}}}{current_text}"
                         output_lines.append(output_line)
 
                 # clear variables and free memory
@@ -2199,10 +1903,11 @@ def parse_xliff_to_dict(xliff_path, output_txt_path):
                 elem.clear()
                 root.clear()
 
-    with open(output_txt_path, "w", encoding="utf-8") as out_file:
-        out_file.write("\n".join(output_lines))
+    with open(output_txt_path, "w", encoding="utf-8", newline='\n') as out_file:
+        for line in output_lines:
+            out_file.write(f"{line}\n")
 
-    print("Parsed XLIFF written to:", output_txt_path)
+    print(f"Parsed XLIFF written to: {output_txt_path}")
 
 
 @mainFunction

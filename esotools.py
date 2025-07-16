@@ -10,12 +10,9 @@ import chardet
 from slpp import slpp as lua
 from collections import defaultdict
 from difflib import SequenceMatcher
-import ruamel.yaml
-from ruamel.yaml.scalarstring import PreservedScalarString
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
 import polib
-from icu import Collator
+import xml.etree.ElementTree as ET
 from icu import Collator, Locale, UCollAttribute, UCollAttributeValue, UnicodeString, BreakIterator
 
 """
@@ -96,7 +93,7 @@ reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
 reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
-reGenderSuffix = re.compile(r'\^[MmFfNn]')
+reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
 
 # Matches a language index in the format {{identifier:}}text
 reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
@@ -121,6 +118,8 @@ reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 
 # Matches a resource name ID in the format sectionId-sectionIndex-stringIndex
 reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
+
+reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 
 # Matches tagged lang entries with optional chunk index after colon
 # Group 1: stringId as "sectionId-sectionIndex-stringIndex"
@@ -549,7 +548,7 @@ def strip_gender_suffix(input_file, output_file="output.txt"):
 
     with open(input_file, 'r', encoding='utf8') as infile, open(output_file, 'w', encoding='utf8') as outfile:
         for line in infile:
-            cleaned_line = reGenderSuffix.sub('', line)
+            cleaned_line = reGrammaticalSuffix.sub('', line)
             outfile.write(cleaned_line)
 
     print("Stripped gender suffixes and saved to {}".format(output_file))
@@ -581,7 +580,7 @@ def extract_npc_name_matches(tagged_txt_file, lua_input_file):
     # Build a cleaned name -> first stringIndex mapping from tagged lang file
     name_to_stringIndex = {}
     for tag, rawname in textUntranslatedLiveDict.items():
-        cleaned_name = reGenderSuffix.sub('', rawname.strip())
+        cleaned_name = reGrammaticalSuffix.sub('', rawname.strip())
         if cleaned_name not in name_to_stringIndex:
             parts = tag.split('-')
             if len(parts) == 3:
