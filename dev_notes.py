@@ -1204,6 +1204,7 @@ def extract_itemnames_raw_data(input_file, input_itemids_file):
 
     print("Done. Output written to {}".format(output_filename))
 
+
 # These two functions process ESO language files like en_itemids.dat or pl_itemids.dat.
 # They extract item IDs from binary chunks in the file:
 #   - `extract_itemids_with_positions`: outputs item ID(s) and byte position ranges.
@@ -1275,7 +1276,6 @@ def extract_itemids_and_subtypes(input_file_path):
 
     print("Done. Output written to {}".format(output_file_path))
     print("Highest item_id encountered: {}".format(max_item_id))
-
 
 
 def main():
