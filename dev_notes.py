@@ -1041,6 +1041,7 @@ def repair_linefeed_cr_encodings(input_translated_file, input_english_file):
     print(f"Fixed output written to: {fixed_filename}")
     print(f"Flagged entries written to: {flagged_filename}")
 
+
 @mainFunction
 def mergeUpdatedValuesIntoLangPreservingOrder(oldLangFile, newLangFile, outputFilename, verificationFilename):
     """
@@ -1110,6 +1111,171 @@ def mergeUpdatedValuesIntoLangPreservingOrder(oldLangFile, newLangFile, outputFi
 
     print(f"✅ Merged complete: {outputFilename}")
     print(f"📝 Verification lines written to: {verificationFilename}")
+
+
+@mainFunction
+def extract_itemname_values(input_file):
+    """
+    Parses en_itemnames.dat:
+    - Handles extended characters using readExtendedChar.
+    - Reads string, a 4-byte item ID file position pointer, a 1-byte count of associated item IDs,
+      and a 4-byte value that represents the byte offset of the next string (not the current string's length).
+    - Outputs: string, position, count, next_string_offset.
+    """
+    basename = os.path.basename(input_file)
+    if "_" in basename:
+        prefix = basename.split("_", 1)[0]  # e.g., "en"
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]  # e.g., "itemnames"
+        output_filename = "{}_output_{}.txt".format(prefix, suffix)
+    else:
+        output_filename = "output_itemnames_values.txt"
+
+    item_names_dict = parse_itemnames_to_dict(input_file)
+
+    with open(output_filename, "w", encoding="utf8") as out:
+        for position in sorted(item_names_dict.keys()):
+            count, next_string_offset, string_value = item_names_dict[position]
+            out.write("{}, {}, {}, {}\n".format(
+                string_value,
+                position,
+                count,
+                next_string_offset
+            ))
+
+    print("Done. Output written to {}".format(output_filename))
+
+
+@mainFunction
+def extract_itemnames_raw_data(input_file, input_itemids_file):
+    """
+    Parses itemnames.dat and itemids.dat to output each entry as:
+    {{position-item_id-count}}string_text
+
+    Notes:
+    - Does not use parse_itemnames_to_dict (no deduplication or validation).
+    - Uses parse_itemids_to_dict to resolve item_id from position.
+    - This is meant as a raw data dump, including duplicates.
+    """
+    id_dict = parse_itemids_to_dict(input_itemids_file)
+
+    basename = os.path.basename(input_file)
+    if "_" in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_filename = "{}_output_{}_raw.txt".format(prefix, suffix)
+    else:
+        output_filename = "output_itemnames_raw.txt"
+
+    with open(input_file, "rb") as f, open(output_filename, "w", encoding="utf8") as out:
+        header = readUInt32(f)
+
+        while True:
+            # Read null-terminated UTF-8 string
+            string_bytes = bytearray()
+            while True:
+                char, shift = readExtendedChar(f)
+                if not char or char == b'\x00':
+                    break
+                string_bytes.extend(char)
+
+            if not string_bytes:
+                break
+
+            string_value = string_bytes.decode("utf-8", errors="replace")
+
+            try:
+                position_bytes = f.read(4)
+                if len(position_bytes) < 4:
+                    break
+                position_value = struct.unpack(">I", position_bytes)[0]
+
+                count_bytes = f.read(1)
+                if not count_bytes:
+                    break
+                item_id_count = struct.unpack(">B", count_bytes)[0]
+
+                f.read(4)  # skip offset
+
+                item_id = id_dict.get(position_value, ([0], None))[0][0]  # fallback 0
+                out.write("{{{{{}-{}-{}}}}}{}\n".format(position_value, item_id, item_id_count, string_value))
+            except Exception as e:
+                print("Error at string '{}': {}".format(string_value, e))
+                break
+
+    print("Done. Output written to {}".format(output_filename))
+
+# These two functions process ESO language files like en_itemids.dat or pl_itemids.dat.
+# They extract item IDs from binary chunks in the file:
+#   - `extract_itemids_with_positions`: outputs item ID(s) and byte position ranges.
+#   - `extract_itemids_and_subtypes`: outputs item ID(s) only, without position information.
+
+@mainFunction
+def extract_itemids_with_positions(input_file_path):
+    """
+    Reads a binary item ID file and outputs each ID along with the byte position it was read from.
+    Formats:
+      - chunk_type 0x01: ID
+      - chunk_type 0x03: ID \t param
+      - chunk_type 0x07: ID \t group \t index
+    Output format: ID [\t param(s)] {start:end}
+    """
+    basename = os.path.basename(input_file_path)
+    if "_" in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_file_path = "{}_output_{}_pos.txt".format(prefix, suffix)
+    else:
+        output_file_path = "output_itemids.txt"
+
+    id_dict = parse_itemids_to_dict(input_file_path)
+    max_item_id = 0
+
+    with open(output_file_path, "w", encoding="utf-8") as out:
+        for pos in sorted(id_dict.keys()):
+            values, end = id_dict[pos]
+            if values and isinstance(values[0], int):
+                max_item_id = max(max_item_id, values[0])
+            out.write("{} {{{}:{}}}\n".format(" ".join(str(v) for v in values), pos, end))
+
+    print("Done. Output written to {}".format(output_file_path))
+    print("Highest item_id encountered: {}".format(max_item_id))
+
+
+@mainFunction
+def extract_itemids_and_subtypes(input_file_path):
+    """
+    Reads en_itemids.dat and outputs only the item ID data (no positions).
+    Handles chunk types:
+      - 0x01: item_id
+      - 0x03: item_id sub_type
+      - 0x07: item_id group index
+
+    Output format:
+    item_id [sub_type] [group index]
+    """
+    import os
+
+    basename = os.path.basename(input_file_path)
+    if "_" in basename:
+        prefix = basename.split("_", 1)[0]
+        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
+        output_file_path = "{}_output_{}.txt".format(prefix, suffix)
+    else:
+        output_file_path = "output_itemids.txt"
+
+    id_dict = parse_itemids_to_dict(input_file_path)
+    max_item_id = 0
+
+    with open(output_file_path, "w", encoding="utf-8") as out:
+        for pos in sorted(id_dict.keys()):
+            values, _ = id_dict[pos]
+            if values and isinstance(values[0], int):
+                max_item_id = max(max_item_id, values[0])
+            out.write("{}\n".format(" ".join(str(v) for v in values)))
+
+    print("Done. Output written to {}".format(output_file_path))
+    print("Highest item_id encountered: {}".format(max_item_id))
+
 
 
 def main():
