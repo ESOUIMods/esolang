@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 import section_constants as section
 import polib
 import xml.etree.ElementTree as ET
-from icu import BreakIterator, Locale
+from icu import Collator, Locale, UCollAttribute, UCollAttributeValue, UnicodeString, BreakIterator
 from datetime import datetime
 
 """
