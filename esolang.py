@@ -2118,7 +2118,7 @@ def diffEnglishLangFiles(current_english_input_file, previous_english_input_file
             closeMatchPtsText.append(lineOut)
         else:
             changedCount += 1
-            lineOut = '{{{{{}:pts:}}}}{}\n{{{{{}:live:}}}}{}\n\n'.format(key, previous_text, key, current_text)
+            lineOut = '{{{{{}:previous:}}}}{}\n{{{{{}:current:}}}}{}\n\n'.format(key, previous_text, key, current_text)
             changedText.append(lineOut)
 
     for key in textPreviousUntranslatedDict:
