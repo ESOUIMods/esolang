@@ -2138,7 +2138,7 @@ def diffEnglishLangFiles(current_english_input_file, previous_english_input_file
     output_filename = generate_output_filename(current_english_input_file, "matched_indexes")
     write_output_file(output_filename, matchedText, matchedCount, 'matched')
     # Write close match Live indexes
-    output_filename = generate_output_filename(current_english_input_file, "close_match_live_indexes")
+    output_filename = generate_output_filename(current_english_input_file, "close_match_current_indexes")
     write_output_file(output_filename, closeMatchLiveText, closMatchCount, 'were a close match')
     # Write close match PTS indexes
     output_filename = generate_output_filename(current_english_input_file, "close_match_previous_indexes")
