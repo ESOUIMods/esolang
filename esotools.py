@@ -749,7 +749,7 @@ def rebuild_formatted_itemnames_binary_with_uppercase(input_itemnames_dat):
 
         for position in sorted(names_dict.keys()):
             count, next_offset, string_text = names_dict[position]
-            string = titlecase(string_text.strip(), base_lang_code="en")
+            string = titlecase(string_text.strip(), base_lang_code=prefix)
             out.write(string.encode("utf-8") + b'\x00')
 
     print("Done. Binary written to", output_bin)
