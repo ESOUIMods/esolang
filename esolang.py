@@ -348,7 +348,7 @@ def is_valid_language_code(code):
     try:
         loc = Locale(code)
         return bool(loc.getLanguage())  # returns False if language is invalid
-    except:
+    except Exception:
         return False
 
 
@@ -388,7 +388,7 @@ def generate_output_filename(translated_file, name_text=None, use_po_extenstion=
                              output_folder=None):
     basename = os.path.basename(translated_file)
 
-    # Try to match the 4 known filename styles
+    # Try to match known filename styles
     maLangCurrent = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
     maLangPrevious = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
     maLangUnderscore = re.match(r"^([a-z]{2})_(?!cur_|prv_)(.*)\.", basename)
@@ -404,11 +404,13 @@ def generate_output_filename(translated_file, name_text=None, use_po_extenstion=
     elif maLangName:
         match = maLangName
 
+    base_lang_code = None
+    base_filename = ""
     if match:
-        full_lang_prefix = match.group(1)
-        base_lang_code = full_lang_prefix[:2]
-        if name_text is None and match.lastindex == 2:
-            name_text = match.group(2)
+        lang_prefix = match.group(1)
+        base_lang_code = lang_prefix[:2]
+        if match.lastindex and match.lastindex >= 2:
+            base_filename = match.group(2)
     else:
         raise ValueError(f"Filename '{basename}' does not match expected pattern '<lang>_<name>.txt'")
 
@@ -432,9 +434,19 @@ def generate_output_filename(translated_file, name_text=None, use_po_extenstion=
             section_part = f"{section_id}_"
 
     # Determine base filename
-    base_name = output_filename or f"{section_part}{name_text.strip().lower().replace(' ', '_')}"
+    if output_filename:
+        base_name = output_filename
+    else:
+        parts = []
+        if section_part:
+            parts.append(section_part.rstrip('_'))  # remove trailing _
+        if base_filename:
+            parts.append(base_filename.strip('_'))
+        if name_text:
+            parts.append(name_text.strip().lower().replace(' ', '_').strip('_'))
+    base_name = "_".join(filter(None, parts))  # filter(None, ...) skips empty strings
     extension = ".po" if use_po_extenstion else ".txt"
-    file_name = f"{full_lang_prefix}_{base_name}{extension}"
+    file_name = f"{lang_prefix}_{base_name}{extension}"
 
     # Prepend output folder path if given
     if output_folder:
@@ -462,6 +474,14 @@ def get_crowdin_po_metadata(filename):
         "Content-Transfer-Encoding": "8bit",
         "X-Generator": "ESO Translation Python Script",
     }
+
+
+def parse_safe_add_string_line(line):
+    match = re.match(r'^SafeAddString\((.*?), "(.*)", \d{1,2}\)$', line)
+    if match:
+        key, value = match.groups()
+        return key, value
+    return None  # optional clarity
 
 
 # Conversion ------------------------------------------------------------------
@@ -919,6 +939,31 @@ def removeIndexFromEosui(txtFilename):
     with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for lineOut in textLines:
             out.write(f"{lineOut}\n")
+
+
+@mainFunction
+def convert_lua_to_str_file(input_filename):
+    """
+    Converts a .lua file containing SafeAddString(...) calls into a .str format.
+
+    Args:
+        input_filename (str): The path to the .lua input file (e.g., 'en_client.lua').
+
+    Output:
+        Writes a .txt file (e.g., 'en_client_converted.txt') with lines in [KEY] = "VALUE" format.
+    """
+    output_filename = generate_output_filename(input_filename, "converted")
+
+    with open(input_filename, "r", encoding="utf-8") as infile, \
+            open(output_filename, "w", encoding="utf-8", newline="\n") as outfile:
+        for line in infile:
+            line = line.strip()
+            parsed = parse_safe_add_string_line(line)
+            if parsed:
+                key, value = parsed
+                outfile.write(f'[{key}] = "{value}"\n')
+
+    print(f"Done. Output written to {output_filename}")
 
 
 def readNullStringByChar(offset, start, file):
