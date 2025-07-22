@@ -1110,3 +1110,30 @@ def mergeUpdatedValuesIntoLangPreservingOrder(oldLangFile, newLangFile, outputFi
 
     print(f"✅ Merged complete: {outputFilename}")
     print(f"📝 Verification lines written to: {verificationFilename}")
+
+
+def main():
+    """ This is to be run from the fontforge UI not any version of python
+    however it won't work because arabic is right to left text with scaling
+    and combining of glyphs it was an experement and I want to preserve this
+    """
+    # Open the font file
+    font = fontforge.open("myfont.ttf")
+
+    # Define the source (Arabic) and target (Chinese) Unicode code point ranges
+    source_start = 0x0600
+    target_start = 0x6E00
+
+    num_glyphs_to_copy = 11172
+    for offset in range(num_glyphs_to_copy):
+        source_unicode = source_start + offset
+        target_unicode = target_start + offset
+
+        source_glyph = font[chr(source_unicode)]
+        target_glyph = font.createMappedChar(target_unicode)
+
+        target_glyph.clear()
+        target_glyph.importOutlines(source_glyph)
+
+    font.save("modified_font.ttf")
+    font.close()
