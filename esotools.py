@@ -128,6 +128,18 @@ reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 reLangChunkedString = re.compile(r'\{\{(\d+-\d+-\d+)(?::(\d+))?\}\}(.*)')
 
 
+def get_section_name(section_id):
+    return section.section_info.get(section_id, {}).get("sectionName")
+
+
+def get_num_strings(section_id):
+    return section.section_info.get(section_id, {}).get("numStrings")
+
+
+def get_max_string_length(section_id):
+    return section.section_info.get(section_id, {}).get("maxStringLength")
+
+
 # Read and write binary structs
 def readUByte(file): return struct.unpack('>B', file.read(1))[0]
 
@@ -294,14 +306,20 @@ def titlecase(text, base_lang_code):
 def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
     basename = os.path.basename(translated_file)
 
-    # Try to match known filename styles
-    maLangCurrent = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
-    maLangPrevious = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
+    # Try to match known filename styles (most specific to most general)
+    maLangCurrentClient = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
+    maLangPreviousClient = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
+    maLangCurrent = re.match(r"^([a-z]{2}_cur)\.", basename)
+    maLangPrevious = re.match(r"^([a-z]{2}_prv)\.", basename)
     maLangUnderscore = re.match(r"^([a-z]{2})_(?!cur_|prv_)(.*)\.", basename)
     maLangName = re.match(r"^([a-z]{2})\.", basename)
 
     match = None
-    if maLangCurrent:
+    if maLangCurrentClient:
+        match = maLangCurrentClient
+    elif maLangPreviousClient:
+        match = maLangPreviousClient
+    elif maLangCurrent:
         match = maLangCurrent
     elif maLangPrevious:
         match = maLangPrevious
@@ -327,15 +345,11 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
     section_part = ""
     if section_id:
         if use_section_name:
-            section_data = section.section_info.get(section_id)
-            if section_data:
-                section_name = section_data.get("sectionKey", f"section_{section_id}")
-                if re.match(r'section_unknown_\d+$', section_name):
-                    section_part = f"{section_id}_"
-                else:
-                    section_part = f"{section_id}_{section_name}_"
+            section_name = get_section_name(section_id)
+            if re.match(r'section_unknown_\d+$', section_name):
+                section_part = f"{section_id}_unknown_section_"
             else:
-                section_part = f"{section_id}_"
+                section_part = f"{section_id}_{section_name}_"
         else:
             section_part = f"{section_id}_"
 
