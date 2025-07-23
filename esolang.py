@@ -384,8 +384,7 @@ def get_icu_locale_from_filename(filename):
     return ICU_LOCALE_MAP[lang_code]
 
 
-def generate_output_filename(translated_file, name_text=None, use_po_extenstion=None, section_id=None, use_section_name=None, output_filename=None,
-                             output_folder=None):
+def generate_output_filename(translated_file, name_text=None, use_po_extenstion=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
     basename = os.path.basename(translated_file)
 
     # Try to match known filename styles
@@ -404,7 +403,7 @@ def generate_output_filename(translated_file, name_text=None, use_po_extenstion=
     elif maLangName:
         match = maLangName
 
-    base_lang_code = None
+    base_lang_code = None  # initialized for scope clarity
     base_filename = ""
     if match:
         lang_prefix = match.group(1)
@@ -444,16 +443,16 @@ def generate_output_filename(translated_file, name_text=None, use_po_extenstion=
             parts.append(base_filename.strip('_'))
         if name_text:
             parts.append(name_text.strip().lower().replace(' ', '_').strip('_'))
-    base_name = "_".join(filter(None, parts))  # filter(None, ...) skips empty strings
+        base_name = "_".join(filter(None, parts))  # filter(None, ...) skips empty strings
     extension = ".po" if use_po_extenstion else ".txt"
     file_name = f"{lang_prefix}_{base_name}{extension}"
 
     # Prepend output folder path if given
     if output_folder:
         os.makedirs(output_folder, exist_ok=True)
-        return os.path.join(output_folder, file_name)
+        return os.path.join(output_folder, file_name), base_lang_code
     else:
-        return file_name
+        return file_name, base_lang_code
 
 
 def get_crowdin_po_metadata(filename):
