@@ -149,19 +149,16 @@ translatedFileStrings = {}
 
 
 # Helper for escaped chars ----------------------------------------------------
-def get_section_id(section_key):
-    return section.section_info.get(section_key, {}).get('sectionId', None)
+def get_section_name(section_id):
+    return section.section_info.get(section_id, {}).get("sectionName")
 
 
-def get_section_name(section_key):
-    return section.section_info.get(section_key, {}).get('sectionName', None)
+def get_num_strings(section_id):
+    return section.section_info.get(section_id, {}).get("numStrings")
 
 
-def get_section_key_by_id(section_id):
-    for key, value in section.section_info.items():
-        if value['sectionId'] == section_id:
-            return key
-    return None
+def get_max_string_length(section_id):
+    return section.section_info.get(section_id, {}).get("maxStringLength")
 
 
 def escape_lua_string(text):
@@ -387,14 +384,20 @@ def get_icu_locale_from_filename(filename):
 def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
     basename = os.path.basename(translated_file)
 
-    # Try to match known filename styles
-    maLangCurrent = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
-    maLangPrevious = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
+    # Try to match known filename styles (most specific to most general)
+    maLangCurrentClient = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
+    maLangPreviousClient = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
+    maLangCurrent = re.match(r"^([a-z]{2}_cur)\.", basename)
+    maLangPrevious = re.match(r"^([a-z]{2}_prv)\.", basename)
     maLangUnderscore = re.match(r"^([a-z]{2})_(?!cur_|prv_)(.*)\.", basename)
     maLangName = re.match(r"^([a-z]{2})\.", basename)
 
     match = None
-    if maLangCurrent:
+    if maLangCurrentClient:
+        match = maLangCurrentClient
+    elif maLangPreviousClient:
+        match = maLangPreviousClient
+    elif maLangCurrent:
         match = maLangCurrent
     elif maLangPrevious:
         match = maLangPrevious
@@ -420,15 +423,11 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
     section_part = ""
     if section_id:
         if use_section_name:
-            section_data = section.section_info.get(section_id)
-            if section_data:
-                section_name = section_data.get("sectionKey", f"section_{section_id}")
-                if re.match(r'section_unknown_\d+$', section_name):
-                    section_part = f"{section_id}_"
-                else:
-                    section_part = f"{section_id}_{section_name}_"
+            section_name = get_section_name(section_id)
+            if re.match(r'section_unknown_\d+$', section_name):
+                section_part = f"{section_id}_unknown_section_"
             else:
-                section_part = f"{section_id}_"
+                section_part = f"{section_id}_{section_name}_"
         else:
             section_part = f"{section_id}_"
 
@@ -1157,9 +1156,8 @@ def processSectionIDs(currentFileIndexes, outputFileName):
 
     # Build lookup of known sectionId -> name
     known_names = {
-        v['sectionId']: k
-        for k, v in section.section_info.items()
-        if not k.startswith("section_unknown_")
+        sid: info.get("sectionName", f"section_unknown_{sid}")
+        for sid, info in section.section_info.items()
     }
 
     current_string_count = 0
@@ -1178,8 +1176,9 @@ def processSectionIDs(currentFileIndexes, outputFileName):
                 known_key = known_names.get(currentSection)
                 name = known_key if known_key else f"section_unknown_{sectionCount}"
                 section_lines.append(
-                    f"    '{name}': {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionId': {currentSection}, 'sectionName': '{name}'}},"
+                    f"    {currentSection}: {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionName': '{name}'}},"
                 )
+
                 if not known_key:
                     sectionCount += 1
 
@@ -1193,10 +1192,9 @@ def processSectionIDs(currentFileIndexes, outputFileName):
 
     # Final section
     if currentSection is not None:
-        known_key = known_names.get(currentSection)
-        name = known_key if known_key else f"section_unknown_{sectionCount}"
+        name = known_names.get(currentSection, f"section_unknown_{sectionCount}")
         section_lines.append(
-            f"    '{name}': {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionId': {currentSection}, 'sectionName': '{name}'}},"
+            f"    {currentSection}: {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionName': '{name}'}},"
         )
 
     # Write output Python file
@@ -1229,41 +1227,23 @@ def build_section_constants(currentLanguageFile):
 def extractSectionEntries(langFile, section_arg, output_filename=None, output_folder=None, useName=True):
     """
     Extracts all entries from a language file for a specific section (by name or ID).
-
-    Args:
-        langFile (str): The .lang file to read (e.g., en.lang).
-        section_arg (str|int): Either the section name (e.g., "lorebook_names") or numeric section ID (e.g., 3427285).
-        useName (bool): If True, filenames will include both ID and section name (if known). Default is True.
-        output_folder (str): Optional. Folder to save output files in (e.g., "tagged_text").
-        output_filename (str): Optional. Base name for the output file (without .txt extension).
-
-    Writes:
-        Output file in the form <output_filename>.txt or <sectionId>_sectionname_lang.txt.
     """
-    try:
+    # Determine section_id and section_name
+    if isinstance(section_arg, int) or str(section_arg).isdigit():
         section_id = int(section_arg)
-        section_key = get_section_key_by_id(section_id)
-    except ValueError:
-        section_id = get_section_id(section_arg)
-        if section_id is None:
-            print(f"Error: Unknown section name '{section_arg}'")
-            return
-        section_key = section_arg
+    else:
+        print(f"Error: section_arg '{section_arg}' must be a numeric section ID")
+        return
 
-    # Determine name_text for the filename
-    name_text = section_key if section_key else f"section_{section_id}"
-
-    # Use unified filename generator
     output_path, _ = generate_output_filename(
         translated_file=langFile,
-        name_text=name_text,
         section_id=section_id,
         use_section_name=useName,
         output_filename=output_filename,
         output_folder=output_folder
     )
 
-    fileIndexes, fileStrings = readLangFile(langFile)
+    fileIndexes, _ = readLangFile(langFile)
 
     with open(output_path, "w", encoding="utf8", newline='\n') as out:
         for i in range(fileIndexes['numIndexes']):
@@ -2274,17 +2254,15 @@ def apply_byte_offset_to_hangul(input_filename):
 
 @mainFunction
 def test_section_functions():
-    section_key = 'section_unknown_1'
-    section_id = get_section_id(section_key)
-    section_name = get_section_name(section_key)
+    section_id = 242841733
+    section_name = get_section_name(section_id)
+    num_strings = get_num_strings(section_id)
+    max_length = get_max_string_length(section_id)
 
-    print("Section ID for '{}': {}".format(section_key, section_id))
-    print("Section Name for '{}': {}".format(section_key, section_name))
-
-    section_id_to_find = 242841733
-    section_key_found = get_section_key_by_id(section_id_to_find)
-
-    print("The sction key found was '{}': using {}".format(section_key_found, section_id_to_find))
+    print(f"Section ID: {section_id}")
+    print(f"Section Name: {section_name}")
+    print(f"Number of Strings: {num_strings}")
+    print(f"Max String Length: {max_length}")
 
 
 test_strings = [
