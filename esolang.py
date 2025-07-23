@@ -384,7 +384,7 @@ def get_icu_locale_from_filename(filename):
     return ICU_LOCALE_MAP[lang_code]
 
 
-def generate_output_filename(translated_file, name_text=None, use_po_extenstion=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
+def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
     basename = os.path.basename(translated_file)
 
     # Try to match known filename styles
@@ -444,7 +444,13 @@ def generate_output_filename(translated_file, name_text=None, use_po_extenstion=
         if name_text:
             parts.append(name_text.strip().lower().replace(' ', '_').strip('_'))
         base_name = "_".join(filter(None, parts))  # filter(None, ...) skips empty strings
-    extension = ".po" if use_po_extenstion else ".txt"
+
+    # Use requested file extension or default to .txt
+    if file_extension:
+        extension = file_extension if file_extension.startswith('.') else f".{file_extension}"
+    else:
+        extension = ".txt"
+
     file_name = f"{lang_prefix}_{base_name}{extension}"
 
     # Prepend output folder path if given
@@ -476,7 +482,10 @@ def get_crowdin_po_metadata(filename):
 
 
 def parse_safe_add_string_line(line):
-    match = re.match(r'^SafeAddString\((.*?), "(.*)", \d{1,2}\)$', line)
+    maSafeAddString = re.match(r'^SafeAddString\((.*?), "(.*)", \d{1,2}\)$', line)
+    maSAS = re.match(r'^SAS\((.*?), "(.*)", \d{1,2}\)$', line)
+
+    match = maSAS or maSafeAddString
     if match:
         key, value = match.groups()
         return key, value
@@ -528,7 +537,7 @@ def addIndexToLangFile(txtFilename, idFilename):
     textLines = []
     idLines = []
 
-    output_filename = generate_output_filename(txtFilename, "add_lang_index")
+    output_filename, _ = generate_output_filename(txtFilename, "add_lang_index")
 
     # Read text file and count lines
     textLineCount = 0
@@ -591,7 +600,7 @@ def removeIndexToLangFile(txtFilename):
     # Get ID numbers ------------------------------------------------------
     textLines = []
 
-    output_filename = generate_output_filename(txtFilename, "remove_lang_index")
+    output_filename, _ = generate_output_filename(txtFilename, "remove_lang_index")
 
     with open(txtFilename, 'r', encoding="utf8") as textIns:
         for line in textIns:
@@ -642,7 +651,7 @@ def koreanToEso(txtFilename):
         犘璔 渀滠 蓶瓤
         ```
     """
-    output_filename = generate_output_filename(txtFilename, "korean_to_eso")
+    output_filename, _ = generate_output_filename(txtFilename, "korean_to_eso")
 
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
@@ -721,7 +730,7 @@ def esoToKorean(txtFilename):
         나는 가고 싶다
         ```
     """
-    output_filename = generate_output_filename(txtFilename, "eso_to_korean")
+    output_filename, _ = generate_output_filename(txtFilename, "eso_to_korean")
 
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
@@ -846,7 +855,7 @@ def addIndexToEosui(txtFilename):
     textLines = []
     indexPrefix = ""
 
-    output_filename = generate_output_filename(txtFilename, "add_esoui_index")
+    output_filename, _ = generate_output_filename(txtFilename, "add_esoui_index")
 
     if re.search('client', txtFilename):
         indexPrefix = "C:"
@@ -912,7 +921,7 @@ def removeIndexFromEosui(txtFilename):
     """
     textLines = []
 
-    output_filename = generate_output_filename(txtFilename, "remove_esoui_index")
+    output_filename, _ = generate_output_filename(txtFilename, "remove_esoui_index")
 
     with open(txtFilename, 'r', encoding="utf8") as textIns:
         for line in textIns:
@@ -943,24 +952,32 @@ def removeIndexFromEosui(txtFilename):
 @mainFunction
 def convert_lua_to_str_file(input_filename):
     """
-    Converts a .lua file containing SafeAddString(...) calls into a .str format.
+    Converts a .lua file containing SafeAddString(...) or SAS(...) calls into a .str format,
+    sorted by the string identifier (e.g., SI_ABILITY_NAME).
 
     Args:
-        input_filename (str): The path to the .lua input file (e.g., 'en_client.lua').
+        input_filename (str): The path to the .lua input file.
 
     Output:
-        Writes a .txt file (e.g., 'en_client_converted.txt') with lines in [KEY] = "VALUE" format.
+        Writes a .str file with lines in [KEY] = "VALUE" format, sorted by KEY.
     """
-    output_filename = generate_output_filename(input_filename, "converted")
+    output_filename, _ = generate_output_filename(input_filename, "converted", file_extension="str")
 
-    with open(input_filename, "r", encoding="utf-8") as infile, \
-            open(output_filename, "w", encoding="utf-8", newline="\n") as outfile:
+    entries = []
+
+    with open(input_filename, "r", encoding="utf-8") as infile:
         for line in infile:
             line = line.strip()
             parsed = parse_safe_add_string_line(line)
             if parsed:
-                key, value = parsed
-                outfile.write(f'[{key}] = "{value}"\n')
+                entries.append(parsed)
+
+    # Sort by the key (SI_... name)
+    entries.sort(key=lambda pair: pair[0])
+
+    with open(output_filename, "w", encoding="utf-8", newline="\n") as outfile:
+        for key, value in entries:
+            outfile.write(f'[{key}] = "{value}"\n')
 
     print(f"Done. Output written to {output_filename}")
 
@@ -1123,7 +1140,7 @@ def rebuildLangFileFromLangFile(inputLangFile):
 
         For example, if the input is 'en.lang', the output will be 'en_output.lang'.
     """
-    output_filename = generate_output_filename(inputLangFile, "rebuild_lang_from_lang")
+    output_filename, _ = generate_output_filename(inputLangFile, "rebuilt_lang_file", file_extension="lang")
 
     currentFileIndexes, currentFileStrings = readLangFile(inputLangFile)
     print(currentFileStrings['stringCount'])
@@ -1237,10 +1254,9 @@ def extractSectionEntries(langFile, section_arg, output_filename=None, output_fo
     name_text = section_key if section_key else f"section_{section_id}"
 
     # Use unified filename generator
-    output_path = generate_output_filename(
+    output_path, _ = generate_output_filename(
         translated_file=langFile,
         name_text=name_text,
-        use_po_extenstion=False,
         section_id=section_id,
         use_section_name=useName,
         output_filename=output_filename,
@@ -1346,7 +1362,7 @@ def combineClientFiles(client_filename, pregame_filename):
             [SI_CONSTANT] = "Some Constant Text"
             [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
     """
-    output_filename = generate_output_filename(client_filename, "combined_client_files")
+    output_filename, _ = generate_output_filename(client_filename, "combined_client_files")
 
     textClientDict = {}
     textPregameDict = {}
@@ -1461,7 +1477,7 @@ def createPoFileFromEsoUI(translated_input_file, english_input_file, isBaseEngli
     """
     po = polib.POFile()
     po.metadata = get_crowdin_po_metadata(translated_input_file)
-    outputFile = generate_output_filename(translated_input_file, "esoui_client_strings", True)
+    output_filename, _ = generate_output_filename(translated_input_file, "esoui_client_strings", file_extension="po")
     locale_translated = get_icu_locale_from_filename(translated_input_file)
     locale_english = get_icu_locale_from_filename(english_input_file)
     english_map = {}
@@ -1516,8 +1532,8 @@ def createPoFileFromEsoUI(translated_input_file, english_input_file, isBaseEngli
                 )
                 po.append(entry)
 
-    po.save(outputFile)
-    print(f"Done. Created .po file: {outputFile}")
+    po.save(output_filename)
+    print(f"Done. Created .po file: {output_filename}")
 
 
 @mainFunction
@@ -1532,7 +1548,7 @@ def createPoFileFromTaggedLangText(translated_input_file, english_input_file, is
     """
     po = polib.POFile()
     po.metadata = get_crowdin_po_metadata(translated_input_file)
-    output_po = generate_output_filename(translated_input_file, name_text=None, use_po_extenstion=True)
+    output_po, _ = generate_output_filename(translated_input_file, file_extension="po")
     locale_translated = get_icu_locale_from_filename(translated_input_file)
     locale_english = get_icu_locale_from_filename(english_input_file)
     english_map = {}
@@ -1588,21 +1604,20 @@ def createPoFileFromTaggedLangText(translated_input_file, english_input_file, is
 
 
 @mainFunction
-def mergeItemnamesToPo(english_txt, translated_txt, output_po=None):
+def mergeItemnamesToPo(english_txt, translated_txt):
     """
     Merges English and translated ESO .txt lang files into a Weblate-compatible PO file.
 
     Args:
         english_txt (str): Tagged English file with lines like {{...}}Text.
         translated_txt (str): Tagged file in target language (e.g., Polish).
-        output_po (str, optional): Output PO filename.
 
     Writes:
         A .po file where msgctxt is the key, msgid is English, and msgstr is translation.
     """
     po = polib.POFile()
 
-    output_po = generate_output_filename(translated_txt, "merged_itemnames", True)
+    output_po, _ = generate_output_filename(translated_txt, "merged_itemnames", file_extension="po")
 
     # Load English
     english_map = {}
@@ -1713,7 +1728,7 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile):
         - It performs exact key matches using the part inside the double curly braces.
         - Unmatched lines are written through unchanged.
     """
-    output_filename = generate_output_filename(fullLangFile, "merged_lang_section")
+    output_filename, _ = generate_output_filename(fullLangFile, "merged_lang_section")
 
     textTranslatedDict.clear()
 
@@ -1765,12 +1780,8 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
     - Writes the output to "output.txt" with potential new translations and to "verify_output.txt" for verification purposes.
     """
     # Generate a dynamic output filename from the translated string file
-    basename = os.path.basename(translated_tagged_text)
-    match = reFilenamePrefix.match(basename)
-    prefix = match.group(1) if match else "xx"  # fallback prefix
-    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]  # e.g., "client" or "pregame"
-    output_filename = generate_output_filename(translated_tagged_text, "compared_lang_files")
-    output_verify_filename = generate_output_filename(translated_tagged_text, "compared_lang_verify")
+    output_filename, _ = generate_output_filename(translated_tagged_text, "compared_lang_files")
+    output_verify_filename, _ = generate_output_filename(translated_tagged_text, "compared_lang_verify")
 
     # Get Previous Translation ------------------------------------------------------
     readTaggedLangFile(translated_tagged_text, textTranslatedDict)
@@ -1864,7 +1875,7 @@ def compareEsoUIFilesForTranslation(translated_string_file, current_english_stri
     """
 
     # Generate a dynamic output filename from the translated string file
-    output_filename = generate_output_filename(translated_string_file, "compared_esoui_files")
+    output_filename, _ = generate_output_filename(translated_string_file, "compared_esoui_files")
 
     # Read translated text ----------------------------------------------------
     processEosuiTextFile(translated_string_file, textTranslatedDict)
@@ -1923,9 +1934,9 @@ def generate_tagged_lang_text(input_lang_file):
     """
     currentFileIndexes, currentFileStrings = readLangFile(input_lang_file)
 
-    output_txt = generate_output_filename(input_lang_file, "tagged_lang")
+    output_filename, _ = generate_output_filename(input_lang_file, "tagged_lang")
 
-    with open(output_txt, 'w', encoding="utf-8", newline='\n') as out:
+    with open(output_filename, 'w', encoding="utf-8", newline='\n') as out:
         for index in range(currentFileIndexes["numIndexes"]):
             entry = currentFileIndexes[index]
             text = entry.get("string")
@@ -1937,7 +1948,7 @@ def generate_tagged_lang_text(input_lang_file):
                 lineOut = restore_escaped_sequences(formatted)
                 out.write(f"{lineOut}\n")
 
-    print(f"Tagged language text written to: {output_txt}")
+    print(f"Tagged language text written to: {output_filename}")
 
 
 def read_tagged_text_to_dict(tagged_text_file):
@@ -2022,7 +2033,7 @@ def rebuildLangFileFromTaggedText(input_tagged_file):
 
         For example, if the input is 'en.lang', the output will be 'en_output.lang'.
     """
-    output_filename = generate_output_filename(input_tagged_file, "rebuild_tagged_lang_file")
+    output_filename, _ = generate_output_filename(input_tagged_file, "rebuilt_tagged_lang_file", file_extension="lang")
 
     currentFileIndexes, currentFileStrings = read_tagged_text_to_dict(input_tagged_file)
     print(f"String Count: {currentFileStrings['stringCount']}")
@@ -2041,7 +2052,7 @@ def parse_xliff_to_dict(xliff_path):
         xliff_path (str): Path to the input .xliff file.
         output_txt_path (str): Path to the output .txt file in tagged lang format.
     """
-    output_filename = generate_output_filename(xliff_path, "xliff_file")
+    output_filename, _ = generate_output_filename(xliff_path, "xliff_file")
     context = ET.iterparse(xliff_path, events=("start", "end"))
     _, root = next(context)  # get root element
 
@@ -2179,22 +2190,22 @@ def diffEnglishLangFiles(current_english_input_file, previous_english_input_file
     print('{}: indexes deleted'.format(deletedCount))
 
     # Write matched indexes
-    output_filename = generate_output_filename(current_english_input_file, "matched_indexes")
+    output_filename, _ = generate_output_filename(current_english_input_file, "matched_indexes")
     write_output_file(output_filename, matchedText, matchedCount, 'matched')
     # Write close match Live indexes
-    output_filename = generate_output_filename(current_english_input_file, "close_match_current_indexes")
+    output_filename, _ = generate_output_filename(current_english_input_file, "close_match_current_indexes")
     write_output_file(output_filename, closeMatchLiveText, closMatchCount, 'were a close match')
     # Write close match PTS indexes
-    output_filename = generate_output_filename(current_english_input_file, "close_match_previous_indexes")
+    output_filename, _ = generate_output_filename(current_english_input_file, "close_match_previous_indexes")
     write_output_file(output_filename, closeMatchPtsText, closMatchCount, 'were a close match')
     # Write changed indexes
-    output_filename = generate_output_filename(current_english_input_file, "changed_indexes")
+    output_filename, _ = generate_output_filename(current_english_input_file, "changed_indexes")
     write_output_file(output_filename, changedText, changedCount, 'changed')
     # Write deleted indexes
-    output_filename = generate_output_filename(current_english_input_file, "deleted_indexes")
+    output_filename, _ = generate_output_filename(current_english_input_file, "deleted_indexes")
     write_output_file(output_filename, deletedText, deletedCount, 'deleted')
     # Write added indexes
-    output_filename = generate_output_filename(current_english_input_file, "added_indexes")
+    output_filename, _ = generate_output_filename(current_english_input_file, "added_indexes")
     write_output_file(output_filename, addedText, addedIndexCount, 'added')
 
 
