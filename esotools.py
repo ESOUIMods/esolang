@@ -275,9 +275,6 @@ def isTranslatedText(text):
     return False
 
 
-from icu import Locale, BreakIterator, UnicodeString
-
-
 def is_valid_language_code(code):
     try:
         loc = Locale(code)
@@ -292,6 +289,83 @@ def titlecase(text, base_lang_code):
     locale = Locale(base_lang_code)
     breaker = BreakIterator.createWordInstance(locale)
     return UnicodeString(text).toTitle(breaker, locale).__str__()
+
+
+def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
+    basename = os.path.basename(translated_file)
+
+    # Try to match known filename styles
+    maLangCurrent = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
+    maLangPrevious = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
+    maLangUnderscore = re.match(r"^([a-z]{2})_(?!cur_|prv_)(.*)\.", basename)
+    maLangName = re.match(r"^([a-z]{2})\.", basename)
+
+    match = None
+    if maLangCurrent:
+        match = maLangCurrent
+    elif maLangPrevious:
+        match = maLangPrevious
+    elif maLangUnderscore:
+        match = maLangUnderscore
+    elif maLangName:
+        match = maLangName
+
+    base_lang_code = None  # initialized for scope clarity
+    base_filename = ""
+    if match:
+        lang_prefix = match.group(1)
+        base_lang_code = lang_prefix[:2]
+        if match.lastindex and match.lastindex >= 2:
+            base_filename = match.group(2)
+    else:
+        raise ValueError(f"Filename '{basename}' does not match expected pattern '<lang>_<name>.txt'")
+
+    if not is_valid_language_code(base_lang_code):
+        raise ValueError(f"Language code '{base_lang_code}' is not valid.")
+
+    # Use section name if applicable
+    section_part = ""
+    if section_id:
+        if use_section_name:
+            section_data = section.section_info.get(section_id)
+            if section_data:
+                section_name = section_data.get("sectionKey", f"section_{section_id}")
+                if re.match(r'section_unknown_\d+$', section_name):
+                    section_part = f"{section_id}_"
+                else:
+                    section_part = f"{section_id}_{section_name}_"
+            else:
+                section_part = f"{section_id}_"
+        else:
+            section_part = f"{section_id}_"
+
+    # Determine base filename
+    if output_filename:
+        base_name = output_filename
+    else:
+        parts = []
+        if section_part:
+            parts.append(section_part.rstrip('_'))  # remove trailing _
+        if base_filename:
+            parts.append(base_filename.strip('_'))
+        if name_text:
+            parts.append(name_text.strip().lower().replace(' ', '_').strip('_'))
+        base_name = "_".join(filter(None, parts))  # filter(None, ...) skips empty strings
+
+    # Use requested file extension or default to .txt
+    if file_extension:
+        extension = file_extension if file_extension.startswith('.') else f".{file_extension}"
+    else:
+        extension = ".txt"
+
+    file_name = f"{lang_prefix}_{base_name}{extension}"
+
+    # Prepend output folder path if given
+    if output_folder:
+        os.makedirs(output_folder, exist_ok=True)
+        return os.path.join(output_folder, file_name), base_lang_code
+    else:
+        return file_name, base_lang_code
 
 
 def parse_itemids_to_dict(input_file_path):
@@ -356,8 +430,6 @@ def parse_itemnames_to_dict(input_file_path):
 
     If duplicate positions are found, skips them with a warning.
     """
-    import struct
-
     result = {}
     seen_positions = set()
 
@@ -654,11 +726,7 @@ def extract_formatted_itemnames(input_file):
         This function assumes the file is a raw binary stream of null-terminated UTF-8 strings.
         It outputs one decoded string per line.
     """
-    basename = os.path.basename(input_file)
-    match = reFilenamePrefix.match(basename)
-    prefix = match.group(1) if match else "xx"
-    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]
-    output_filename = "{}_output_{}.txt".format(prefix, suffix)
+    output_filename, _ = generate_output_filename(input_file, "extracted_formatted_itemnames")
 
     string_count = 0
     with open(input_file, 'rb') as f, open(output_filename, 'w', encoding="utf8") as out:
@@ -706,12 +774,9 @@ def rebuild_formatted_itemnames_binary(input_itemnames_dat, input_itemids_dat, i
     id_dict = parse_itemids_to_dict(input_itemids_dat)
     names_dict = parse_itemnames_to_dict(input_itemnames_dat)
 
-    basename = os.path.basename(item_names_txt)
-    prefix = basename.split("_", 1)[0]
-    suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
-    output_bin = "{}_output_{}.dat".format(prefix, suffix)
+    output_filename, _ = generate_output_filename(item_names_txt, "rebuilt_formatted_itemnames", file_extension="dat")
 
-    with open(output_bin, "wb") as out:
+    with open(output_filename, "wb") as out:
         out.write(struct.pack(">I", 0x00000001))  # Header
 
         for position in sorted(names_dict.keys()):
@@ -720,7 +785,7 @@ def rebuild_formatted_itemnames_binary(input_itemnames_dat, input_itemids_dat, i
             string = itemid_to_formatted_itemnames.get(item_id, fallback_name).strip()
             out.write(string.encode("utf-8") + b'\x00')
 
-    print("Done. Binary written to", output_bin)
+    print("Done. Binary written to", output_filename)
 
 
 @mainFunction
@@ -738,21 +803,17 @@ def rebuild_formatted_itemnames_binary_with_uppercase(input_itemnames_dat):
     """
     names_dict = parse_itemnames_to_dict(input_itemnames_dat)
 
-    basename = os.path.basename(input_itemnames_dat)
-    match = reFilenamePrefix.match(basename)
-    prefix = match.group(1) if match else "xx"  # fallback to "xx" if no match
-    suffix = basename.rsplit(".", 1)[0].split("_", 1)[-1]
-    output_bin = "{}_output_formatteditemnames.dat".format(prefix, suffix)
+    output_filename, lang_code = generate_output_filename(input_itemnames_dat, "rebuilt_formatted_itemnames_uppercase", file_extension="dat")
 
-    with open(output_bin, "wb") as out:
+    with open(output_filename, "wb") as out:
         out.write(struct.pack(">I", 0x00000001))  # Header
 
         for position in sorted(names_dict.keys()):
             count, next_offset, string_text = names_dict[position]
-            string = titlecase(string_text.strip(), base_lang_code=prefix)
+            string = titlecase(string_text.strip(), base_lang_code=lang_code)
             out.write(string.encode("utf-8") + b'\x00')
 
-    print("Done. Binary written to", output_bin)
+    print("Done. Binary written to", output_filename)
 
 
 @mainFunction
@@ -768,13 +829,7 @@ def extract_itemnames_for_rebuild(input_itemnames_file, input_itemids_file):
     item_names_dict = parse_itemnames_to_dict(input_itemnames_file)
     id_dict = parse_itemids_to_dict(input_itemids_file)
 
-    basename = os.path.basename(input_itemnames_file)
-    if "_" in basename:
-        prefix = basename.split("_", 1)[0]
-        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
-        output_filename = "{}_output_{}_rebuild.txt".format(prefix, suffix)
-    else:
-        output_filename = "output_itemnames_rebuild.txt"
+    output_filename, _ = generate_output_filename(input_itemnames_file, "extracted_itemnames")
 
     with open(output_filename, "w", encoding="utf8") as out:
         for position in sorted(item_names_dict.keys()):
@@ -809,10 +864,7 @@ def rebuild_itemnames_binary(input_txt, sort=False):
       - 4-byte offset to next string (absolute)
     """
     entries = []
-    basename = os.path.basename(input_txt)
-    prefix = basename.split("_", 1)[0]
-    suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
-    output_bin = "{}_output_{}.dat".format(prefix, suffix)
+    output_filename, _ = generate_output_filename(input_txt, "rebuilt_itemnames", file_extension="dat")
 
     with open(input_txt, "r", encoding="utf-8") as infile:
         for line in infile:
@@ -829,7 +881,7 @@ def rebuild_itemnames_binary(input_txt, sort=False):
         collator.setAttribute(UCollAttribute.CASE_LEVEL, UCollAttributeValue.OFF)
         entries.sort(key=lambda x: collator.getSortKey(x[0].decode("utf-8")))
 
-    with open(output_bin, "wb") as out:
+    with open(output_filename, "wb") as out:
         out.write(struct.pack(">I", 0x00000002))  # Actual header from original file
 
         previous_offset = 4
@@ -855,7 +907,7 @@ def rebuild_itemnames_binary(input_txt, sort=False):
             previous_offset = current_offset
             previous_len = name_len
 
-    print("Binary file written to", output_bin)
+    print("Binary file written to", output_filename)
 
 
 @mainFunction
@@ -873,6 +925,8 @@ def merge_translated_itemnames(translated_txt_file, en_itemnames_file, en_itemid
         merged_<translated_txt_file>.txt with full 1:1 line count, either translated or original English.
     """
     itemid_to_translated_strings = {}  # itemId → set of positions
+    output_filename, _ = generate_output_filename(translated_txt_file, "merged_itemnames")
+
     with open(translated_txt_file, "r", encoding="utf8") as f:
         for line in f:
             match = re.match(r"^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$", line.strip())
@@ -900,12 +954,11 @@ def merge_translated_itemnames(translated_txt_file, en_itemnames_file, en_itemid
             string_text = itemid_to_translated_strings.get(item_id)
         output_lines.append("{{{{{}-{}-{}}}}}{}".format(position, item_id, count, string_text))
 
-    out_file = "merged_" + os.path.basename(translated_txt_file)
-    with open(out_file, "w", encoding="utf8") as out:
+    with open(output_filename, "w", encoding="utf8", newline='\n') as out:
         for line in output_lines:
-            out.write(line + "\n")
+            out.write(f"{line}\n")
 
-    print("Merged output written to", out_file)
+    print("Merged output written to", output_filename)
 
 
 if __name__ == "__main__":
