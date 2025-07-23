@@ -961,7 +961,7 @@ def convert_lua_to_str_file(input_filename):
     Output:
         Writes a .str file with lines in [KEY] = "VALUE" format, sorted by KEY.
     """
-    output_filename, _ = generate_output_filename(input_filename, "converted", file_extension="str")
+    output_filename, _ = generate_output_filename(input_filename, file_extension="str")
 
     entries = []
 
