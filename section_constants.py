@@ -284,7 +284,7 @@ section_info = {
     161754069: {'numStrings': 165, 'maxStringLength': 23, 'sectionName': 'section_unknown_250'},
     162144901: {'numStrings': 13, 'maxStringLength': 19, 'sectionName': 'section_unknown_251'},
     162658389: {'numStrings': 1059, 'maxStringLength': 30, 'sectionName': 'zone_id_names'},
-    162946485: {'numStrings': 18429, 'maxStringLength': 30, 'sectionName': 'section_unknown_252'},
+    162946485: {'numStrings': 18429, 'maxStringLength': 30, 'sectionName': 'subzone_names'},
     164009093: {'numStrings': 13868, 'maxStringLength': 43, 'sectionName': 'interaction_display_text_164'},
     164317956: {'numStrings': 33, 'maxStringLength': 92, 'sectionName': 'section_unknown_253'},
     164328533: {'numStrings': 1, 'maxStringLength': 8, 'sectionName': 'section_unknown_254'},
