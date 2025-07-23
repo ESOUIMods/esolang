@@ -1922,33 +1922,45 @@ def compareEsoUIFilesForTranslation(translated_string_file, current_english_stri
 @mainFunction
 def generate_tagged_lang_text(input_lang_file):
     """
-    Reads a .lang file and outputs a tagged text file in the format:
-    {{sectionId-stringId:}}text
+    Reads a .lang file and outputs:
+    1. A tagged text file in the format {{sectionId-sectionIndex-stringIndex:}}text
+    2. A parallel .txt file containing just the IDs (sectionId-sectionIndex-stringIndex), line-for-line aligned.
 
     Args:
         input_lang_file (str): Path to a .lang file like en.lang, ko.lang, etc.
 
     Output:
-        <prefix>_tagged_<suffix>.txt — where <prefix> is the language (e.g., 'ko') and
-        <suffix> is the rest of the filename excluding the extension.
+        <prefix>_tagged_<suffix>.txt — tagged entries
+        <prefix>_ids_only_<suffix>.txt — IDs only (for rebuild support)
     """
     currentFileIndexes, currentFileStrings = readLangFile(input_lang_file)
 
-    output_filename, _ = generate_output_filename(input_lang_file, "tagged_lang")
+    output_filename, _ = generate_output_filename(input_lang_file, "tagged_lang_text")
+    id_output_filename, _ = generate_output_filename(input_lang_file, "tagged_lang_ids")
 
-    with open(output_filename, 'w', encoding="utf-8", newline='\n') as out:
+    with open(output_filename, 'w', encoding="utf-8", newline='\n') as out_tagged, \
+            open(id_output_filename, 'w', encoding="utf-8", newline='\n') as out_ids:
+
         for index in range(currentFileIndexes["numIndexes"]):
             entry = currentFileIndexes[index]
             text = entry.get("string")
             if text:
+                section_id = entry['sectionId']
+                section_index = entry['sectionIndex']
+                string_index = entry['stringIndex']
+                entry_id = f"{section_id}-{section_index}-{string_index}"
+
                 preserved_nbsp = preserve_nbsp_bytes(text)
                 escaped = preserve_escaped_sequences_bytes(preserved_nbsp)
                 decoded = escaped.decode("utf-8", errors="replace").rstrip()
-                formatted = f"{{{{{entry['sectionId']}-{entry['sectionIndex']}-{entry['stringIndex']}:}}}}{decoded}"
+                formatted = f"{{{{{entry_id}:}}}}{decoded}"
                 lineOut = restore_escaped_sequences(formatted)
-                out.write(f"{lineOut}\n")
+
+                out_tagged.write(f"{lineOut}\n")
+                out_ids.write(f"{entry_id}\n")
 
     print(f"Tagged language text written to: {output_filename}")
+    print(f"Corresponding ID list written to: {id_output_filename}")
 
 
 def read_tagged_text_to_dict(tagged_text_file):
