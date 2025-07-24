@@ -5,14 +5,9 @@ import os
 import inspect
 import re
 import struct
-import codecs
-import chardet
 from slpp import slpp as lua
-from collections import defaultdict
 from difflib import SequenceMatcher
 import section_constants as section
-import polib
-import xml.etree.ElementTree as ET
 from icu import Collator, Locale, UCollAttribute, UCollAttributeValue, UnicodeString, BreakIterator
 
 """
@@ -96,7 +91,7 @@ reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
 
 # Matches a language index in the format {{identifier:}}text
-reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
+reLangIndex = re.compile(r'^\{\{([^:]+):\}\}(.+?)$')
 
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
 reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
@@ -119,6 +114,7 @@ reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 # Matches a resource name ID in the format sectionId-sectionIndex-stringIndex
 reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 
+# Matches ESO color tags in the format |cFFFFFF (start color) and |r (reset color)
 reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 
 # Matches tagged lang entries with optional chunk index after colon
@@ -138,31 +134,6 @@ def get_num_strings(section_id):
 
 def get_max_string_length(section_id):
     return section.section_info.get(section_id, {}).get("maxStringLength")
-
-
-# Read and write binary structs
-def readUByte(file): return struct.unpack('>B', file.read(1))[0]
-
-
-def readUInt16(file): return struct.unpack('>H', file.read(2))[0]
-
-
-def readUInt32(file): return struct.unpack('>I', file.read(4))[0]
-
-
-def readUInt64(file): return struct.unpack('>Q', file.read(8))[0]
-
-
-def writeUByte(file, value): file.write(struct.pack('>B', value))
-
-
-def writeUInt16(file, value): file.write(struct.pack('>H', value))
-
-
-def writeUInt32(file, value): file.write(struct.pack('>I', value))
-
-
-def writeUInt64(file, value): file.write(struct.pack('>Q', value))
 
 
 def restore_nbsp_bytes(raw_bytes):
@@ -260,6 +231,44 @@ def readNullString(offset, start, file):
     return textLine
 
 
+def calculate_similarity_and_threshold(text1, text2):
+    if not text1 or not text2:
+        return False
+
+    subText1 = reColorTag.sub('', text1)
+    subText2 = reColorTag.sub('', text2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
+
+    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
+    return text1 == text2 or similarity_ratio > 0.6
+
+
+def calculate_similarity_ratio(text1, text2):
+    if text1 is None or text2 is None:
+        return False
+
+    subText1 = reColorTag.sub('', text1)
+    subText2 = reColorTag.sub('', text2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
+
+    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
+    return similarity_ratio > 0.6
+
+
+def isFallbackEnglish(translated, current_text, previous_text):
+    return (translated == previous_text and translated != current_text) or (translated == current_text)
+
+
+def isIdenticalText(current_text, previous_text):
+    return current_text == previous_text
+
+
+def isSimilarText(current_text, previous_text):
+    return calculate_similarity_ratio(current_text, previous_text)
+
+
 def isTranslatedText(text):
     """
     Determines whether the input appears to be translated text.
@@ -280,18 +289,43 @@ def isTranslatedText(text):
     if any(ord(char) > 127 for char in text):
         return True
 
-    latin_translation_chars = set("ñáéíóúüàâæçèêëîïôœùûÿäößãõêîìíòùąćęłńśźżğıİş")
+    latin_translation_chars = set("ñáéíóúüàâæçèêëîïôœùûÿäößãõêîìíòùąćęłńśźżğıİş¡¿")
     if any(char in latin_translation_chars for char in text.lower()):
         return True
 
     return False
 
 
+# Read and write binary structs
+def readUByte(file): return struct.unpack('>B', file.read(1))[0]
+
+
+def readUInt16(file): return struct.unpack('>H', file.read(2))[0]
+
+
+def readUInt32(file): return struct.unpack('>I', file.read(4))[0]
+
+
+def readUInt64(file): return struct.unpack('>Q', file.read(8))[0]
+
+
+def writeUByte(file, value): file.write(struct.pack('>B', value))
+
+
+def writeUInt16(file, value): file.write(struct.pack('>H', value))
+
+
+def writeUInt32(file, value): file.write(struct.pack('>I', value))
+
+
+def writeUInt64(file, value): file.write(struct.pack('>Q', value))
+
+
 def is_valid_language_code(code):
     try:
         loc = Locale(code)
         return bool(loc.getLanguage())  # returns False if language is invalid
-    except:
+    except Exception:
         return False
 
 
@@ -882,9 +916,9 @@ def rebuild_itemnames_binary(input_txt, sort=False):
 
     with open(input_txt, "r", encoding="utf-8") as infile:
         for line in infile:
-            match = re.match(r"\{\{(\d+)-\d+-(\d+)\}\}(.*)", line.strip())
+            match = reItemnameTagged.match(line.strip())
             if match:
-                pos, count, name = match.groups()
+                pos, item_id, count, name = match.groups()
                 entries.append((name.encode("utf-8"), int(pos), int(count)))
             else:
                 print("Skipping invalid line:", line.strip())
@@ -943,13 +977,10 @@ def merge_translated_itemnames(translated_txt_file, en_itemnames_file, en_itemid
 
     with open(translated_txt_file, "r", encoding="utf8") as f:
         for line in f:
-            match = re.match(r"^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$", line.strip())
+            match = reItemnameTagged.match(line.strip())
             if match:
-                position = int(match.group(1))
-                item_id = int(match.group(2))
-                count = int(match.group(3))
-                text = match.group(4).strip()
-                itemid_to_translated_strings[item_id] = text
+                position, item_id, count, text = match.groups()
+                itemid_to_translated_strings[int(item_id)] = text.strip()
 
     # Read English itemids
     id_dict = parse_itemids_to_dict(en_itemids_file)
@@ -966,7 +997,7 @@ def merge_translated_itemnames(translated_txt_file, en_itemnames_file, en_itemid
         hasTranslation = itemid_to_translated_strings.get(item_id) is not None
         if hasTranslation:
             string_text = itemid_to_translated_strings.get(item_id)
-        output_lines.append("{{{{{}-{}-{}}}}}{}".format(position, item_id, count, string_text))
+        output_lines.append(f"{{{{{position}-{item_id}-{count}}}}}{string_text}")
 
     with open(output_filename, "w", encoding="utf8", newline='\n') as out:
         for line in output_lines:
