@@ -6,12 +6,11 @@ import inspect
 import re
 import struct
 import codecs
-import chardet
 from difflib import SequenceMatcher
 import section_constants as section
 import polib
 import xml.etree.ElementTree as ET
-from icu import Collator, Locale, UCollAttribute, UCollAttributeValue, UnicodeString, BreakIterator
+from icu import Locale, BreakIterator
 from datetime import datetime
 
 """
@@ -90,7 +89,7 @@ def main():
 # Matches the 2-letter language prefix at the start of a filename, such as 'pl_itemnames.dat' or 'en.lang'
 reFilenamePrefix = re.compile(r'^([a-z]{2})[_\.]', re.IGNORECASE)
 
-# Matches lines in the format {{position-itemId-count}}string_text from itemnames .txt files
+# Matches lines in the format {{position-itemId-count}}string_text from itemnames.dat files
 reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
 
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
@@ -123,6 +122,7 @@ reFontTag = re.compile(r'^\[Font:(.+?)\] = "(.+?)"')
 # Matches a resource name ID in the format sectionId-sectionIndex-stringIndex
 reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 
+# Matches ESO color tags in the format |cFFFFFF (start color) and |r (reset color)
 reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 
 # Matches tagged lang entries with optional chunk index after colon
@@ -278,6 +278,88 @@ def readExtendedChar(file):
     return char_bytes, shift
 
 
+def readNullStringByChar(offset, start, file):
+    """Reads a null-terminated UTF-8 string one char at a time, preserving raw binary bytes."""
+    currentPosition = file.tell()
+    file.seek(start + offset)
+
+    nullChar = False
+    textLine = b''
+
+    while not nullChar:
+        char, shift = readExtendedChar(file)
+        if not char:
+            break  # EOF
+
+        if char == b'\x00':
+            nullChar = True
+            break
+
+        textLine = b''.join([textLine, char])
+
+    file.seek(currentPosition)
+    return textLine
+
+
+def readNullString(offset, start, file):
+    """Reads a null-terminated string from the file, starting at the given offset within the chunk.
+
+    Args:
+        offset (int): The offset within the chunk to start reading the string.
+        start (int): The starting position within the file.
+        file (file): The file object to read from.
+
+    Returns:
+        bytes: The read null-terminated string.
+    """
+    chunkSize = 1024
+    nullChar = False
+    textLine = b''
+    currentPosition = file.tell()
+    file.seek(start + offset)
+    while not nullChar:
+        chunk = file.read(chunkSize)
+        if not chunk:
+            # End of file
+            break
+        null_index = chunk.find(b"\x00")
+        if null_index >= 0:
+            # Found the null terminator within the chunk
+            textLine += chunk[:null_index]
+            nullChar = True
+        else:
+            # Null terminator not found in this chunk, so append the whole chunk to textLine
+            textLine += chunk
+    file.seek(currentPosition)
+    return textLine
+
+
+def calculate_similarity_and_threshold(text1, text2):
+    if not text1 or not text2:
+        return False
+
+    subText1 = reColorTag.sub('', text1)
+    subText2 = reColorTag.sub('', text2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
+
+    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
+    return text1 == text2 or similarity_ratio > 0.6
+
+
+def calculate_similarity_ratio(text1, text2):
+    if text1 is None or text2 is None:
+        return False
+
+    subText1 = reColorTag.sub('', text1)
+    subText2 = reColorTag.sub('', text2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
+
+    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
+    return similarity_ratio > 0.6
+
+
 def isFallbackEnglish(translated, current_text, previous_text):
     return (translated == previous_text and translated != current_text) or (translated == current_text)
 
@@ -309,6 +391,7 @@ def isTranslatedText(text):
     # Now guaranteed to be a str from here onward
     if any(ord(char) > 127 for char in text):
         return True
+
     latin_translation_chars = set("ñáéíóúüàâæçèêëîïôœùûÿäößãõêîìíòùąćęłńśźżğıİş¡¿")
     if any(char in latin_translation_chars for char in text.lower()):
         return True
@@ -369,12 +452,11 @@ ICU_LOCALE_MAP = {
 
 def get_icu_locale_from_filename(filename):
     basename = os.path.basename(filename)
-    match = re.match(r"^([a-z]{2}_?(cur|prv)?_?)(.*)\.", basename)
+    match = reFilenamePrefix.match(basename)
     if not match:
         raise ValueError(f"Filename '{basename}' does not start with a 2-letter language code.")
 
-    lang_prefix = match.group(1).rstrip('_')
-    lang_code = lang_prefix[:2]
+    lang_code = match.group(1)
     if lang_code not in ICU_LOCALE_MAP:
         raise ValueError(f"Language code '{lang_code}' is not in ICU_LOCALE_MAP.")
 
@@ -462,12 +544,11 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
 
 def get_crowdin_po_metadata(filename):
     basename = os.path.basename(filename)
-    match = re.match(r"^([a-z]{2}_?(cur|prv)?_?)(.*)\.", basename)
+    match = reFilenamePrefix.match(basename)
     if not match:
         raise ValueError(f"Filename '{basename}' does not start with a 2-letter language code.")
 
-    lang_prefix = match.group(1).rstrip('_')
-    lang_code = lang_prefix[:2]
+    lang_code = match.group(1)
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M+0000")
 
     return {
@@ -979,62 +1060,6 @@ def convert_lua_to_str_file(input_filename):
             outfile.write(f'[{key}] = "{value}"\n')
 
     print(f"Done. Output written to {output_filename}")
-
-
-def readNullStringByChar(offset, start, file):
-    """Reads a null-terminated UTF-8 string one char at a time, preserving raw binary bytes."""
-    currentPosition = file.tell()
-    file.seek(start + offset)
-
-    nullChar = False
-    textLine = b''
-
-    while not nullChar:
-        char, shift = readExtendedChar(file)
-        if not char:
-            break  # EOF
-
-        if char == b'\x00':
-            nullChar = True
-            break
-
-        textLine = b''.join([textLine, char])
-
-    file.seek(currentPosition)
-    return textLine
-
-
-def readNullString(offset, start, file):
-    """Reads a null-terminated string from the file, starting at the given offset within the chunk.
-
-    Args:
-        offset (int): The offset within the chunk to start reading the string.
-        start (int): The starting position within the file.
-        file (file): The file object to read from.
-
-    Returns:
-        bytes: The read null-terminated string.
-    """
-    chunkSize = 1024
-    nullChar = False
-    textLine = b''
-    currentPosition = file.tell()
-    file.seek(start + offset)
-    while not nullChar:
-        chunk = file.read(chunkSize)
-        if not chunk:
-            # End of file
-            break
-        null_index = chunk.find(b"\x00")
-        if null_index >= 0:
-            # Found the null terminator within the chunk
-            textLine += chunk[:null_index]
-            nullChar = True
-        else:
-            # Null terminator not found in this chunk, so append the whole chunk to textLine
-            textLine += chunk
-    file.seek(currentPosition)
-    return textLine
 
 
 def readLangFile(languageFileName):
@@ -1654,32 +1679,6 @@ def cleanText(line):
     line = reColorTagError.sub('', line)
 
     return line
-
-
-def calculate_similarity_and_threshold(text1, text2):
-    if not text1 or not text2:
-        return False
-
-    subText1 = reColorTag.sub('', text1)
-    subText2 = reColorTag.sub('', text2)
-    subText1 = reGrammaticalSuffix.sub('', subText1)
-    subText2 = reGrammaticalSuffix.sub('', subText2)
-
-    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
-    return text1 == text2 or similarity_ratio > 0.6
-
-
-def calculate_similarity_ratio(text1, text2):
-    if text1 is None or text2 is None:
-        return False
-
-    subText1 = reColorTag.sub('', text1)
-    subText2 = reColorTag.sub('', text2)
-    subText1 = reGrammaticalSuffix.sub('', subText1)
-    subText2 = reGrammaticalSuffix.sub('', subText2)
-
-    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
-    return similarity_ratio > 0.6
 
 
 @mainFunction
