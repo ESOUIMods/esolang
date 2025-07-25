@@ -59,9 +59,9 @@ def main():
     args = parser.parse_args()
 
     if args.usage:
-        print("Usage: esokr.py function [args [args ...]]")
-        print("       esokr.py --help-functions, or help")
-        print("       esokr.py --list-functions, or list")
+        print("Usage: esolang.py function [args [args ...]]")
+        print("       esolang.py --help-functions, or help")
+        print("       esolang.py --list-functions, or list")
     elif args.help_functions or args.function == "help":
         print_docstrings()
     elif args.list_functions or args.function == "list":
@@ -334,6 +334,28 @@ def readNullString(offset, start, file):
     return textLine
 
 
+def readTaggedLangFile(taggedFile):
+    """
+    Read a tagged language file and return a dictionary mapping tags to text.
+
+    Args:
+        taggedFile (str): The filename of the tagged language file to read.
+
+    Returns:
+        dict: A dictionary of key-text pairs extracted from the file.
+    """
+    targetDict = {}
+    with open(taggedFile, 'r', encoding="utf8") as textIns:
+        for line in textIns:
+            maLangIndex = reLangIndex.match(line)
+            if maLangIndex:
+                conIndex = maLangIndex.group(1)
+                conText = maLangIndex.group(2)
+                targetDict[conIndex] = conText
+
+    return targetDict
+
+
 def calculate_similarity_and_threshold(text1, text2):
     if not text1 or not text2:
         return False
@@ -432,39 +454,9 @@ def is_valid_language_code(code):
         return False
 
 
-ICU_LOCALE_MAP = {
-    "en": "en_US",
-    "ko": "ko_KR",
-    "tr": "tr_TR",
-    "fr": "fr_FR",
-    "de": "de_DE",
-    "ru": "ru_RU",
-    "ja": "ja_JP",
-    "zh": "zh_CN",
-    "es": "es_ES",
-    "it": "it_IT",
-    "pl": "pl_PL",
-    "pt": "pt_BR",
-    "th": "th_TH",
-    "uk": "uk_UA",
-}
-
-
-def get_icu_locale_from_filename(filename):
-    basename = os.path.basename(filename)
-    match = reFilenamePrefix.match(basename)
-    if not match:
-        raise ValueError(f"Filename '{basename}' does not start with a 2-letter language code.")
-
-    lang_code = match.group(1)
-    if lang_code not in ICU_LOCALE_MAP:
-        raise ValueError(f"Language code '{lang_code}' is not in ICU_LOCALE_MAP.")
-
-    return ICU_LOCALE_MAP[lang_code]
-
-
 def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
-    basename = os.path.basename(translated_file)
+    basename = os.path.basename(translated_file).lower()
+    basename = re.sub(r"(esotokorean|koreantoeso)", "", basename)
 
     # Try to match known filename styles (most specific to most general)
     maLangCurrentClient = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
@@ -540,6 +532,37 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
         return os.path.join(output_folder, file_name), base_lang_code
     else:
         return file_name, base_lang_code
+
+
+ICU_LOCALE_MAP = {
+    "en": "en_US",
+    "ko": "ko_KR",
+    "tr": "tr_TR",
+    "fr": "fr_FR",
+    "de": "de_DE",
+    "ru": "ru_RU",
+    "ja": "ja_JP",
+    "zh": "zh_CN",
+    "es": "es_ES",
+    "it": "it_IT",
+    "pl": "pl_PL",
+    "pt": "pt_BR",
+    "th": "th_TH",
+    "uk": "uk_UA",
+}
+
+
+def get_icu_locale_from_filename(filename):
+    basename = os.path.basename(filename)
+    match = reFilenamePrefix.match(basename)
+    if not match:
+        raise ValueError(f"Filename '{basename}' does not start with a 2-letter language code.")
+
+    lang_code = match.group(1)
+    if lang_code not in ICU_LOCALE_MAP:
+        raise ValueError(f"Language code '{lang_code}' is not in ICU_LOCALE_MAP.")
+
+    return ICU_LOCALE_MAP[lang_code]
 
 
 def get_crowdin_po_metadata(filename):
@@ -731,7 +754,7 @@ def koreanToEso(txtFilename):
         犘璔 渀滠 蓶瓤
         ```
     """
-    output_filename, _ = generate_output_filename(txtFilename, "korean_to_eso")
+    output_filename, _ = generate_output_filename(txtFilename, "koreanToEso")
 
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
@@ -810,7 +833,7 @@ def esoToKorean(txtFilename):
         나는 가고 싶다
         ```
     """
-    output_filename, _ = generate_output_filename(txtFilename, "eso_to_korean")
+    output_filename, _ = generate_output_filename(txtFilename, "esoToKorean")
 
     not_eof = True
     with open(txtFilename, 'rb') as textIns:
@@ -1149,30 +1172,6 @@ def writeLangFile(languageFileName, fileIndexes, fileStrings):
         print(f"[writeLangFile]: String Count: {numStrings}")
 
 
-@mainFunction
-def rebuildLangFileFromLangFile(inputLangFile):
-    """
-    Reads a language file, identifies duplicate strings, and ensures that repeated strings
-    share the same offset in the output. This rebuilds the language file so that identical
-    strings are stored only once.
-
-    Args:
-        inputLangFile (str): The name of the input .lang file (e.g. 'en.lang', 'ko.lang').
-
-    Output:
-        {prefix}_output_{suffix}.lang: the optimized language file
-
-        For example, if the input is 'en.lang', the output will be 'en_output.lang'.
-    """
-    output_filename, _ = generate_output_filename(inputLangFile, "rebuilt_lang_file", file_extension="lang")
-
-    currentFileIndexes, currentFileStrings = readLangFile(inputLangFile)
-    print(currentFileStrings['stringCount'])
-    writeLangFile(output_filename, currentFileIndexes, currentFileStrings)
-
-    print("Optimized file written to: {}".format(output_filename))
-
-
 def processSectionIDs(currentFileIndexes, outputFileName):
     numIndexes = currentFileIndexes['numIndexes']
     currentSection = None
@@ -1309,18 +1308,20 @@ def extractAllSections(langFile):
         )
 
 
-def processEosuiTextFile(filename, text_dict):
-    """Read and process an ESOUI text file (en_client.str or en_pregame.str)
-    and populate the provided text_dict.
+def process_eosui_client_file(input_filename):
+    """
+    Read and process an ESOUI text file (e.g., en_client.str or en_pregame.str)
+    and return a dictionary of extracted key-text entries.
 
     Args:
-        filename (str): The filename of the ESOUI text file (en_client.str or en_pregame.str) to process.
-        text_dict (dict): A dictionary to store the extracted text entries.
+        filename (str): The filename of the ESOUI text file to process.
 
     Returns:
-        None
+        dict: A dictionary mapping keys to extracted text.
     """
-    with open(filename, 'r', encoding="utf8") as textIns:
+    text_dict = {}
+
+    with open(input_filename, 'r', encoding="utf8") as textIns:
         for line in textIns:
             line = line.rstrip()
             line = normalize_crowdin_csv_line(line)
@@ -1329,12 +1330,13 @@ def processEosuiTextFile(filename, text_dict):
 
             if maEmptyString:
                 conIndex = maEmptyString.group(1)
-                conText = ""
-                text_dict[conIndex] = conText
+                text_dict[conIndex] = ""
             elif maClientUntaged:
-                conIndex = maClientUntaged.group(1)  # Key (conIndex)
-                conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ''
+                conIndex = maClientUntaged.group(1)
+                conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ""
                 text_dict[conIndex] = conText
+
+    return text_dict
 
 
 @mainFunction
@@ -1369,12 +1371,8 @@ def combineClientFiles(client_filename, pregame_filename):
     """
     output_filename, _ = generate_output_filename(client_filename, "combined_client_files")
 
-    textClientDict = {}
-    textPregameDict = {}
-
-    # Load both files using shared helper
-    processEosuiTextFile(client_filename, textClientDict)
-    processEosuiTextFile(pregame_filename, textPregameDict)
+    textClientDict = process_eosui_client_file(client_filename)
+    textPregameDict = process_eosui_client_file(pregame_filename)
 
     # Merge into single output dictionary
     mergedDict = {}
@@ -1470,7 +1468,7 @@ def split_if_long(text, locale="en_US"):
 
 
 @mainFunction
-def createPoFileFromEsoUI(translated_input_file, english_input_file, isBaseEnglish=False):
+def create_po_from_esoui(translated_input_file, english_input_file, isBaseEnglish=False):
     """
     Converts ESO .str files into a .po file, splitting long entries with sentence boundaries
     and preserving leading/trailing space via <<LS>> and <<TS>> tags.
@@ -1542,7 +1540,7 @@ def createPoFileFromEsoUI(translated_input_file, english_input_file, isBaseEngli
 
 
 @mainFunction
-def createPoFileFromTaggedLangText(translated_input_file, english_input_file, isBaseEnglish=False):
+def create_po_from_tagged_lang_text(translated_input_file, english_input_file, isBaseEnglish=False):
     """
     Converts two tagged ESO lang files ({{key:}}Text format) into a .po file,
     using ICU sentence-aware chunking when text exceeds 500 characters.
@@ -1608,65 +1606,6 @@ def createPoFileFromTaggedLangText(translated_input_file, english_input_file, is
     print(f"PO output written to: {output_po}")
 
 
-@mainFunction
-def mergeItemnamesToPo(english_txt, translated_txt):
-    """
-    Merges English and translated ESO .txt lang files into a Weblate-compatible PO file.
-
-    Args:
-        english_txt (str): Tagged English file with lines like {{...}}Text.
-        translated_txt (str): Tagged file in target language (e.g., Polish).
-
-    Writes:
-        A .po file where msgctxt is the key, msgid is English, and msgstr is translation.
-    """
-    po = polib.POFile()
-
-    output_po, _ = generate_output_filename(translated_txt, "merged_itemnames", file_extension="po")
-
-    # Load English
-    english_map = {}
-    with open(english_txt, 'r', encoding='utf-8') as f:
-        for line in f:
-            match = reItemnameTagged.match(line.rstrip())
-            if match:
-                key = f"{{{{{match.group(1)}-{match.group(2)}-{match.group(3)}}}}}"
-                text = match.group(4)
-                english_map[key] = text
-
-    # Load Translated
-    translated_map = {}
-    with open(translated_txt, 'r', encoding='utf-8') as f:
-        for line in f:
-            match = reItemnameTagged.match(line.rstrip())
-            if match:
-                key = f"{{{{{match.group(1)}-{match.group(2)}-{match.group(3)}}}}}"
-                text = match.group(4)
-                translated_map[key] = text
-
-    # Merge
-    for key, en_text in english_map.items():
-        entry = polib.POEntry(
-            msgctxt=key,
-            msgid=en_text,
-            msgstr=translated_map.get(key, "")
-        )
-        po.append(entry)
-
-    po.save(output_po)
-    print(f"Merged PO written to: {output_po}")
-
-
-def readTaggedLangFile(taggedFile, targetDict):
-    with open(taggedFile, 'r', encoding="utf8") as textIns:
-        for line in textIns:
-            maLangIndex = reLangIndex.match(line)
-            if maLangIndex:
-                conIndex = maLangIndex.group(1)
-                conText = maLangIndex.group(2)
-                targetDict[conIndex] = conText
-
-
 def cleanText(line):
     if line is None:
         return None
@@ -1682,7 +1621,7 @@ def cleanText(line):
 
 
 @mainFunction
-def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile):
+def merge_section_into_lang(main_lang_file, source_lang_file):
     """
     Import a translated section into a full language file by matching tagged keys.
 
@@ -1692,46 +1631,77 @@ def mergeExtractedSectionIntoLang(fullLangFile, sectionLangFile):
       - A **full language file** that contains the complete set of entries for a language (typically untranslated).
 
     It then replaces any matching entries in the full language file with the corresponding translated entries,
-    based on exact key matches. Only lines starting with a valid key tag will be considered.
+    based on exact key matches. Only entries with a valid tag will be considered.
 
-    The output is written to `output.txt` (or a specified output file), preserving the untranslated entries and
-    merging in any provided translations from the section file.
+    The output is written to a file named with `merged_lang_section` appended to the original filename.
 
     Args:
-        translatedSectionFile (str): The filename of the translated section file, e.g. `lorebooks_uk.txt`, containing tagged entries.
-        fullLangFile (str): The full language file to update, e.g. `en.lang_tag.txt`, containing all entries.
-        outputLangFile (str, optional): The filename to write the merged output to. Defaults to `"output.txt"`.
+        main_lang_file (str): The full language file to update, e.g. `en.lang_tag.txt`, containing all entries.
+        source_lang_file (str): The translated section file, e.g. `lorebooks_uk.txt`, containing tagged entries.
 
     Notes:
-        - This function expects both files to use tagged entry formats like `{{211640654-0-5066:}}Some text`
-        - It performs exact key matches using the part inside the double curly braces.
-        - Unmatched lines are written through unchanged.
+        - Both input files must use the format: `{{211640654-0-5066:}}Some text`
+        - Only keys in the main file are written; any extra keys in the source file are ignored.
+        - Unmatched keys are preserved as-is.
     """
-    output_filename, _ = generate_output_filename(fullLangFile, "merged_lang_section")
+    output_filename, _ = generate_output_filename(main_lang_file, "merged_lang_section")
 
-    textTranslatedDict.clear()
+    main_dict = readTaggedLangFile(main_lang_file)
+    source_dict = readTaggedLangFile(source_lang_file)
 
-    # Read the translated section file into the global dict
-    with open(sectionLangFile, 'r', encoding="utf8") as sec:
-        for line in sec:
-            m = reLangIndex.match(line)
-            if m:
-                key, value = m.groups()
-                textTranslatedDict[key] = value.rstrip("\n")
+    # Overwrite main_dict values with those in source_dict if key matches
+    for key in source_dict:
+        if key in main_dict:
+            main_dict[key] = source_dict[key]
 
-    # Read the full lang file and replace lines with translated ones
-    with open(fullLangFile, 'r', encoding="utf8") as full:
-        with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
-            for line in full:
-                m = reLangIndex.match(line)
-                if m:
-                    key, _ = m.groups()
-                    if key in textTranslatedDict:
-                        line = f"{{{{{key}:}}}}{textTranslatedDict[key]}"
-                line = line.rstrip()
-                out.write(f"{line}\n")
+    # Write merged output
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
+        for key, value in main_dict.items():
+            out.write(f"{{{{{key}:}}}}{value}\n")
 
-    print(f"Merged translations from {sectionLangFile} into {fullLangFile} → {output_filename}")
+    print(f"Merged translations from {source_lang_file} into {main_lang_file} → {output_filename}")
+
+
+@mainFunction
+def merge_client_strings(main_client_file, source_client_file):
+    """
+    Merge two ESOUI-format language files, replacing entries in the main file with those from the source file.
+
+    This function reads:
+      - A **main_lang_file**: the primary language file to preserve and write to.
+      - A **source_lang_file**: another language file containing updated or alternative entries.
+
+    Any matching keys found in both files will be replaced in the output with the string from the source file.
+
+    Args:
+        main_lang_file (str): The main ESOUI-format language file (e.g. `ko.lang`, `en.lang`) to merge into.
+        source_lang_file (str): The ESOUI-format file providing replacement strings.
+
+    Output:
+        A merged .lang file with updated strings written to a new file (e.g., `ko_merged.lang`).
+
+    Notes:
+        - This assumes both files are valid ESOUI-format .lang files.
+        - No validation or version checks are performed; this is intended for up-to-date clean files.
+        - Output filename is auto-generated using `generate_output_filename()` with `"merged_esoui"` tag.
+    """
+    output_filename, _ = generate_output_filename(main_client_file, "merged_esoui")
+
+    # Parse both files into dictionaries
+    main_map = process_eosui_client_file(main_client_file)
+    source_map = process_eosui_client_file(source_client_file)
+
+    # Merge source entries into main
+    for key in main_map:
+        if key in source_map:
+            main_map[key] = source_map[key]
+
+    # Write output
+    with open(output_filename, "w", encoding="utf-8", newline='\n') as out:
+        for key in sorted(main_map.keys()):
+            out.write(f"{key}{main_map[key]}\n")
+
+    print(f"Merged ESOUI entries from {source_client_file} into {main_client_file} → {output_filename}")
 
 
 @mainFunction
@@ -1763,13 +1733,13 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
     output_verify_filename, _ = generate_output_filename(translated_tagged_text, "compared_lang_verify")
 
     # Get Previous Translation ------------------------------------------------------
-    readTaggedLangFile(translated_tagged_text, textTranslatedDict)
+    textTranslatedDict = readTaggedLangFile(translated_tagged_text)
     print("Processed Translated Text")
     # Get Current/PTS English Text ------------------------------------------------------
-    readTaggedLangFile(current_tagged_english_text, textCurrentUntranslatedDict)
+    textCurrentUntranslatedDict = readTaggedLangFile(current_tagged_english_text)
     print("Processed Current Text")
     # Get Previous/Live English Text ------------------------------------------------------
-    readTaggedLangFile(previous_tagged_english_text, textPreviousUntranslatedDict)
+    textPreviousUntranslatedDict = readTaggedLangFile(previous_tagged_english_text)
     print("Processed Previous Text")
     # Compare PTS with Live text, write output -----------------------------------------
     print("Begining Comparison")
@@ -1857,11 +1827,11 @@ def compareEsoUIFilesForTranslation(translated_string_file, current_english_stri
     output_filename, _ = generate_output_filename(translated_string_file, "compared_esoui_files")
 
     # Read translated text ----------------------------------------------------
-    processEosuiTextFile(translated_string_file, textTranslatedDict)
+    textTranslatedDict = process_eosui_client_file(translated_string_file)
     # Read pts text ----------------------------------------------------
-    processEosuiTextFile(current_english_string_file, textCurrentUntranslatedDict)
+    textCurrentUntranslatedDict = process_eosui_client_file(current_english_string_file)
     # Read live text ----------------------------------------------------
-    processEosuiTextFile(previous_english_string_file, textPreviousUntranslatedDict)
+    textPreviousUntranslatedDict = process_eosui_client_file(previous_english_string_file)
     # --Write Output ------------------------------------------------------
     with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for key in textCurrentUntranslatedDict:
@@ -2010,6 +1980,30 @@ def read_tagged_text_to_dict(tagged_text_file):
 
 
 @mainFunction
+def rebuildLangFileFromLangFile(inputLangFile):
+    """
+    Reads a language file, identifies duplicate strings, and ensures that repeated strings
+    share the same offset in the output. This rebuilds the language file so that identical
+    strings are stored only once.
+
+    Args:
+        inputLangFile (str): The name of the input .lang file (e.g. 'en.lang', 'ko.lang').
+
+    Output:
+        {prefix}_output_{suffix}.lang: the optimized language file
+
+        For example, if the input is 'en.lang', the output will be 'en_output.lang'.
+    """
+    output_filename, _ = generate_output_filename(inputLangFile, "rebuilt_lang_file", file_extension="lang")
+
+    currentFileIndexes, currentFileStrings = readLangFile(inputLangFile)
+    print(currentFileStrings['stringCount'])
+    writeLangFile(output_filename, currentFileIndexes, currentFileStrings)
+
+    print("Optimized file written to: {}".format(output_filename))
+
+
+@mainFunction
 def rebuildLangFileFromTaggedText(input_tagged_file):
     """
     Reads a language file, identifies duplicate strings, and ensures that repeated strings
@@ -2087,34 +2081,47 @@ def parse_xliff_to_dict(xliff_path):
 @mainFunction
 def diffEnglishLangFiles(current_english_input_file, previous_english_input_file):
     """
-    Compare differences between the current and PTS 'en.lang' files after conversion to text and tagging.
+    Compare differences between the current and previous 'en.lang' files after tagging.
 
-    This function analyzes differences between two versions of 'en.lang' files: the current version and the PTS version.
-    It then categorizes and writes the findings to separate output files.
+    This function analyzes differences between two versions of tagged English language files:
+    the current version (e.g., PTS) and the previous version (e.g., live). It identifies and
+    categorizes differences such as matched, changed, added, and deleted entries, as well as
+    entries that are similar but not identical.
 
     Args:
-        LiveFilename (str): The filename of the previous/live 'en.lang' file with tags.
-        ptsFilename (str): The filename of the current/PTS 'en.lang' file with tags.
+        current_english_input_file (str): Tagged English file representing the current version.
+        previous_english_input_file (str): Tagged English file representing the previous version.
+
+    Behavior:
+        - Reads both files into dictionaries using `readTaggedLangFile()`.
+        - Compares entries using exact match and similarity threshold logic.
+        - Categorizes results into:
+            - Matched entries
+            - Close (similar) entries
+            - Changed entries
+            - Newly added entries
+            - Deleted entries
+
+    Output:
+        Uses `generate_output_filename()` to create output filenames based on the input file.
+        Filenames follow the pattern:
+            <lang_prefix>_<base>_<category>.txt
+        where:
+            - <lang_prefix> is derived from the input filename (e.g., 'en_cur')
+            - <base> is the base tag like 'lang', 'pregame', etc.
+            - <category> includes:
+                - matched_indexes.txt
+                - close_match_current_indexes.txt
+                - close_match_previous_indexes.txt
+                - changed_indexes.txt
+                - deleted_indexes.txt
+                - added_indexes.txt
+
+        Each output file includes a summary count and the relevant entries.
 
     Notes:
-        The function reads the translation data from the specified files using the 'readTaggedLangFile' function.
-        The analysis results are categorized into 'matched', 'close match', 'changed', 'added', and 'deleted' indexes.
-        Output is written to various output files for further review and analysis.
-
-    The function performs the following steps:
-    - Reads translation data from the specified files into dictionaries.
-    - Compares translations between PTS and live texts, categorizing indexes as 'matched', 'close match', 'changed',
-      'added', or 'deleted'.
-    - Identifies and categorizes new and deleted indexes.
-    - Writes analysis results to separate output files.
-
-    Outputs:
-    - 'matchedIndexes.txt': Indexes that have identical translations in PTS and live versions.
-    - 'closeMatchLiveIndexes.txt': Indexes with translations that are close in similarity between PTS and live versions.
-    - 'closeMatchPtsIndexes.txt': Corresponding PTS translations for 'closeMatchLiveIndexes.txt'.
-    - 'changedIndexes.txt': Indexes with changed translations between PTS and live versions.
-    - 'deletedIndexes.txt': Indexes present in the live version but absent in the PTS version.
-    - 'addedIndexes.txt': Indexes that are newly added in the PTS version.
+        - Input files must use the tagged format: {{section-index-string:}}Text
+        - This function assumes the inputs are aligned by section/key format.
     """
 
     def write_output_file(filename, targetList, targetCount, targetString):
@@ -2125,9 +2132,9 @@ def diffEnglishLangFiles(current_english_input_file, previous_english_input_file
                 out.write(line)
 
     # Get Current/Live English Text ------------------------------------------------------
-    readTaggedLangFile(current_english_input_file, textCurrentUntranslatedDict)
+    textCurrentUntranslatedDict = readTaggedLangFile(current_english_input_file)
     # Get Previous/PTS English Text ------------------------------------------------------
-    readTaggedLangFile(previous_english_input_file, textPreviousUntranslatedDict)
+    textPreviousUntranslatedDict = readTaggedLangFile(previous_english_input_file)
 
     # Compare Live with PTS text, write output -------------------------------------------
     matchedText = []
