@@ -101,10 +101,10 @@ reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
 
 # Matches untagged client strings or empty lines in the format [key] = "value" or [key] = ""
-reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
+reClientUntaged = re.compile(r'^\[([A-Z_0-9]+)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
 
 # Matches tagged client strings in the format [key] = "{tag:value}text"
-reClientTaged = re.compile(r'^\[(.+?)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
+reClientTaged = re.compile(r'^\[([A-Z_0-9]+)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
 
 # Matches empty client strings in the format [key] = ""
 reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
