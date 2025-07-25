@@ -108,10 +108,10 @@ reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
 
 # Matches untagged client strings or empty lines in the format [key] = "value" or [key] = ""
-reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
+reClientUntaged = re.compile(r'^\[([A-Z_0-9]+)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
 
 # Matches tagged client strings in the format [key] = "{tag:value}text"
-reClientTaged = re.compile(r'^\[(.+?)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
+reClientTaged = re.compile(r'^\[([A-Z_0-9]+)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
 
 # Matches empty client strings in the format [key] = ""
 reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
@@ -2212,7 +2212,7 @@ def diffEnglishLangFiles(current_english_input_file, previous_english_input_file
 # =============================================================================
 
 @mainFunction
-def apply_byte_offset_to_hangul(input_filename):
+def test_apply_byte_offset_to_hangul(input_filename):
     """
     Apply Byte Offset to Korean Hangul Characters (BETA)
 
@@ -2404,14 +2404,42 @@ def test_add_tags():
 
 
 @mainFunction
-def print_groups():
-    for count, string in enumerate(test_strings, start=1):
+def test_print_groups():
+    input_filename = "test_input.str"
+    test_dict = {}
+    with open(input_filename, 'r', encoding="utf8") as textIns:
+        for line in textIns:
+            line = line.rstrip()
+            maEmptyString = reEmptyString.match(line)
+            maClientUntaged = reClientUntaged.match(line)
+            maClientTaged = reClientTaged.match(line)
+            maFontTag = reFontTag.match(line)
+
+            if maEmptyString:
+                conIndex = maEmptyString.group(1)
+                test_dict[conIndex] = ""
+            elif maClientUntaged:
+                conIndex = maClientUntaged.group(1)
+                conText = maClientUntaged.group(2) if maClientUntaged.group(2) is not None else ""
+                test_dict[conIndex] = conText
+            elif maClientTaged:
+                conIndex = maClientTaged.group(1)
+                tag = maClientTaged.group(2)
+                text = maClientTaged.group(3)
+                test_dict[conIndex] = f"{tag}{text}"
+            elif maFontTag:
+                conIndex = f"Font:{maFontTag.group(1)}"
+                conText = maFontTag.group(2)
+                test_dict[conIndex] = conText
+
+    for count, (key, value) in enumerate(test_dict.items(), start=1):
+        string = f"[{key}] = \"{value}\""
         maClientUntaged = reClientUntaged.match(string)
         maClientTaged = reClientTaged.match(string)
         maEmptyString = reEmptyString.match(string)
         maFontTag = reFontTag.match(string)
 
-        print("String #{}: {}".format(count, string))
+        print(f"String #{count}: {string}")
 
         if maClientUntaged:
             print("Using reClientUntaged:")
@@ -2435,6 +2463,7 @@ def print_groups():
             print("Group 2:", maFontTag.group(2))
 
         print()
+
 
 
 if __name__ == "__main__":
