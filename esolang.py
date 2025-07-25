@@ -534,6 +534,25 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
         return file_name, base_lang_code
 
 
+def read_font_lines(fonts_filename):
+    """
+    Read font tag lines from a .str file to reuse them in other output files.
+    
+    Args:
+        fonts_filename (str): Filename containing font lines (e.g. kr_fonts.str)
+
+    Returns:
+        list[str]: Lines like [Font:ZoFontAlert] = "...", newline-stripped.
+    """
+    font_lines = []
+    with open(fonts_filename, 'r', encoding="utf8") as file:
+        for line in file:
+            line = line.rstrip()
+            if reFontTag.match(line):
+                font_lines.append(line)
+    return font_lines
+
+
 ICU_LOCALE_MAP = {
     "en": "en_US",
     "ko": "ko_KR",
@@ -1050,6 +1069,25 @@ def removeIndexFromEosui(txtFilename):
     with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
         for lineOut in textLines:
             out.write(f"{lineOut}\n")
+
+
+@mainFunction
+def write_korean_file_with_fonts(source_filename):
+    fonts_filename = "korean_font_header.txt"
+    output_filename, _ = generate_output_filename(source_filename, "with_fonts", file_extension="str")
+
+    font_lines = read_font_lines(fonts_filename)
+    text_dict = process_eosui_client_file(source_filename)
+
+    with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
+        # Write font header
+        for line in font_lines:
+            out.write(line + "\n")
+        # Write translated strings
+        for key, value in text_dict.items():
+            out.write(f"[{key}] = \"{value}\"\n")
+
+    print(f"Done. Output written to {output_filename}")
 
 
 @mainFunction
@@ -2463,7 +2501,6 @@ def test_print_groups():
             print("Group 2:", maFontTag.group(2))
 
         print()
-
 
 
 if __name__ == "__main__":
