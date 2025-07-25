@@ -8,6 +8,7 @@ import struct
 from slpp import slpp as lua
 from difflib import SequenceMatcher
 import section_constants as section
+import polib
 from icu import Collator, Locale, UCollAttribute, UCollAttributeValue, UnicodeString, BreakIterator
 
 """
@@ -56,9 +57,9 @@ def main():
     args = parser.parse_args()
 
     if args.usage:
-        print("Usage: esokr.py function [args [args ...]]")
-        print("       esokr.py --help-functions, or help")
-        print("       esokr.py --list-functions, or list")
+        print("Usage: esotools.py function [args [args ...]]")
+        print("       esotools.py --help-functions, or help")
+        print("       esotools.py --list-functions, or list")
     elif args.help_functions or args.function == "help":
         print_docstrings()
     elif args.list_functions or args.function == "list":
@@ -231,6 +232,28 @@ def readNullString(offset, start, file):
     return textLine
 
 
+def readTaggedLangFile(taggedFile):
+    """
+    Read a tagged language file and return a dictionary mapping tags to text.
+
+    Args:
+        taggedFile (str): The filename of the tagged language file to read.
+
+    Returns:
+        dict: A dictionary of key-text pairs extracted from the file.
+    """
+    targetDict = {}
+    with open(taggedFile, 'r', encoding="utf8") as textIns:
+        for line in textIns:
+            maLangIndex = reLangIndex.match(line)
+            if maLangIndex:
+                conIndex = maLangIndex.group(1)
+                conText = maLangIndex.group(2)
+                targetDict[conIndex] = conText
+
+    return targetDict
+
+
 def calculate_similarity_and_threshold(text1, text2):
     if not text1 or not text2:
         return False
@@ -329,16 +352,9 @@ def is_valid_language_code(code):
         return False
 
 
-def titlecase(text, base_lang_code):
-    if not is_valid_language_code(base_lang_code):
-        raise ValueError(f"Language code '{base_lang_code}' is not valid.")
-    locale = Locale(base_lang_code)
-    breaker = BreakIterator.createWordInstance(locale)
-    return UnicodeString(text).toTitle(breaker, locale).__str__()
-
-
 def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
-    basename = os.path.basename(translated_file)
+    basename = os.path.basename(translated_file).lower()
+    basename = re.sub(r"(esotokorean|koreantoeso)", "", basename)
 
     # Try to match known filename styles (most specific to most general)
     maLangCurrentClient = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
@@ -414,6 +430,14 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
         return os.path.join(output_folder, file_name), base_lang_code
     else:
         return file_name, base_lang_code
+
+
+def titlecase(text, base_lang_code):
+    if not is_valid_language_code(base_lang_code):
+        raise ValueError(f"Language code '{base_lang_code}' is not valid.")
+    locale = Locale(base_lang_code)
+    breaker = BreakIterator.createWordInstance(locale)
+    return UnicodeString(text).toTitle(breaker, locale).__str__()
 
 
 def parse_itemids_to_dict(input_file_path):
@@ -693,16 +717,6 @@ def strip_gender_suffix(input_file, output_file="output.txt"):
     print("Stripped gender suffixes and saved to {}".format(output_file))
 
 
-def readTaggedLangFile(taggedFile, targetDict):
-    with open(taggedFile, 'r', encoding="utf8") as textIns:
-        for line in textIns:
-            maLangIndex = reLangIndex.match(line)
-            if maLangIndex:
-                conIndex = maLangIndex.group(1)
-                conText = maLangIndex.group(2)
-                targetDict[conIndex] = conText
-
-
 @mainFunction
 def extract_npc_name_matches(tagged_txt_file, lua_input_file):
     """
@@ -713,8 +727,7 @@ def extract_npc_name_matches(tagged_txt_file, lua_input_file):
         tagged_txt_file (str): File with lines like {{8290981-0-123:}}Julien Rissiel^M
         lua_input_file (str): Lua file with [npc_id] = "Name", lines
     """
-    textUntranslatedLiveDict = {}
-    readTaggedLangFile(tagged_txt_file, textUntranslatedLiveDict)
+    textUntranslatedLiveDict = readTaggedLangFile(tagged_txt_file)
 
     # Build a cleaned name -> first stringIndex mapping from tagged lang file
     name_to_stringIndex = {}
@@ -1004,6 +1017,60 @@ def merge_translated_itemnames(translated_txt_file, en_itemnames_file, en_itemid
             out.write(f"{line}\n")
 
     print("Merged output written to", output_filename)
+
+
+@mainFunction
+def create_po_from_itemnames_dat(translated_txt, english_txt):
+    """
+    Creates a PO file from tagged English and translated item name files.
+
+    This function reads two text files with entries in the format:
+        {{section-id-string-id}}Text
+    and merges them into a standard .po file format for translation tools.
+
+    Args:
+        english_txt (str): The tagged English item name file.
+        translated_txt (str): The tagged translated item name file.
+
+    Writes:
+        A .po file where msgctxt is the key (e.g. {{4-54476-1}}),
+        msgid is the English text, and msgstr is the translated text.
+    """
+    po = polib.POFile()
+
+    output_po, _ = generate_output_filename(translated_txt, "merged_itemnames", file_extension="po")
+
+    # Load English
+    english_map = {}
+    with open(english_txt, 'r', encoding='utf-8') as f:
+        for line in f:
+            match = reItemnameTagged.match(line.rstrip())
+            if match:
+                key = f"{{{{{match.group(1)}-{match.group(2)}-{match.group(3)}}}}}"
+                text = match.group(4)
+                english_map[key] = text
+
+    # Load Translated
+    translated_map = {}
+    with open(translated_txt, 'r', encoding='utf-8') as f:
+        for line in f:
+            match = reItemnameTagged.match(line.rstrip())
+            if match:
+                key = f"{{{{{match.group(1)}-{match.group(2)}-{match.group(3)}}}}}"
+                text = match.group(4)
+                translated_map[key] = text
+
+    # Merge
+    for key, en_text in english_map.items():
+        entry = polib.POEntry(
+            msgctxt=key,
+            msgid=en_text,
+            msgstr=translated_map.get(key, "")
+        )
+        po.append(entry)
+
+    po.save(output_po)
+    print(f"Merged PO written to: {output_po}")
 
 
 if __name__ == "__main__":
