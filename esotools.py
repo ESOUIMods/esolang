@@ -88,6 +88,9 @@ reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
 reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 
+# Tagged .lang lines with optional range: {{key:start,end}}string_text
+reTaggedLangWithRange = re.compile(r'^\{\{(\d+-\d+-\d+)(?::(\d+),(\d+))?\}\}(.*)$')
+
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
 reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
 
@@ -117,13 +120,6 @@ reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 
 # Matches ESO color tags in the format |cFFFFFF (start color) and |r (reset color)
 reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
-
-# Matches tagged lang entries with optional chunk index after colon
-# Group 1: stringId as "sectionId-sectionIndex-stringIndex"
-# Group 2 (optional): chunk index (e.g., ":1", ":2", etc.)
-# Group 3: the actual translated or source text string
-reLangChunkedString = re.compile(r'\{\{(\d+-\d+-\d+)(?::(\d+))?\}\}(.*)')
-
 
 def get_section_name(section_id):
     return section.section_info.get(section_id, {}).get("sectionName")
@@ -241,6 +237,9 @@ def readTaggedLangFile(taggedFile):
 
     Returns:
         dict: A dictionary of key-text pairs extracted from the file.
+
+    Example tagged entry:
+        {{12345-0-1:}}Translated text
     """
     targetDict = {}
     with open(taggedFile, 'r', encoding="utf8") as textIns:
