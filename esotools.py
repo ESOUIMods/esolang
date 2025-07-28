@@ -121,6 +121,7 @@ reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 # Matches ESO color tags in the format |cFFFFFF (start color) and |r (reset color)
 reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 
+
 def get_section_name(section_id):
     return section.section_info.get(section_id, {}).get("sectionName")
 
