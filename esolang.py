@@ -95,6 +95,9 @@ reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
 reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 
+# Tagged .lang lines with optional range: {{key:start,end}}string_text
+reTaggedLangWithRange = re.compile(r'^\{\{(\d+-\d+-\d+)(?::(\d+),(\d+))?\}\}(.*)$')
+
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
 reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
 
@@ -124,12 +127,6 @@ reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 
 # Matches ESO color tags in the format |cFFFFFF (start color) and |r (reset color)
 reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
-
-# Matches tagged lang entries with optional chunk index after colon
-# Group 1: stringId as "sectionId-sectionIndex-stringIndex"
-# Group 2 (optional): chunk index (e.g., ":1", ":2", etc.)
-# Group 3: the actual translated or source text string
-reLangChunkedString = re.compile(r'\{\{(\d+-\d+-\d+)(?::(\d+))?\}\}(.*)')
 
 # Global Dictionaries ---------------------------------------------------------
 textCurrentUntranslatedDict = {}
@@ -163,32 +160,6 @@ def get_max_string_length(section_id):
 
 def escape_lua_string(text):
     return text.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace(r'\\\"', r'\"')
-
-
-def preserve_and_restore_escaped_sequences(text):
-    """
-    Preserve escaped sequences using placeholders, then restore them after transformations.
-
-    Args:
-        text (str): Input string possibly containing escaped sequences.
-
-    Returns:
-        str: Transformed string with escaped sequences preserved and restored.
-    """
-    # Preserve sequences
-    text = text.replace('\\\\', '-=DS=-')  # Escaped backslashes
-    text = text.replace('\\n', '-=CR=-')  # Escaped newlines
-    text = re.sub(r'\s+\\$', '-=ELS=-', text)  # Trailing backslash with optional whitespace
-    text = text.replace('\\"', '-=DQ=-')  # Escaped double quotes
-    text = text.replace('\\', '')  # Remove any remaining lone backslashes
-
-    # Restore sequences
-    text = text.replace('-=DS=-', '\\\\')
-    text = text.replace('-=CR=-', '\\n')
-    text = text.replace('-=ELS=-', '')  # End-of-line backslash removal
-    text = text.replace('-=DQ=-', '\\"')
-
-    return text
 
 
 def preserve_escaped_sequences(text):
@@ -260,6 +231,34 @@ def clean_esoui_key(esoui_key):
             return match.group(1)
     return esoui_key
 
+def clean_tagged_lang_key(key):
+    """
+    Formats numeric keys into {{key:}} style for tagged lang files.
+
+    Examples:
+        "70901198-0-1000"       -> "{{70901198-0-1000:}}"
+        "70901198-0-1000:1,2"   -> "{{70901198-0-1000:1,2}}"
+        "{{70901198-0-1000:}}"   -> "{{70901198-0-1000:}}" (unchanged)
+    """
+    # Already correctly formatted
+    if key.startswith("{{") and key.endswith("}}"):
+        return key
+
+    # Match using reTaggedLangWithRange
+    match = reTaggedLangWithRange.match(f"{{{{{key}}}}}") if not key.startswith("{{") else reTaggedLangWithRange.match(key)
+    if match:
+        base_id = match.group(1)
+        start = match.group(2)
+        end = match.group(3)
+
+        # If a range exists (start,end), return with range
+        if start and end:
+            return f"{{{{{base_id}:{start},{end}}}}}"
+        # If no range, return with trailing colon
+        return f"{{{{{base_id}:}}}}"
+
+    # Fallback: wrap key with trailing colon
+    return f"{{{{{key}:}}}}"
 
 def readExtendedChar(file):
     """
@@ -2168,47 +2167,48 @@ def rebuild_lang_file_from_tagged_text(input_tagged_file):
 @mainFunction
 def convert_xliff_to_tagged_lang_text(input_xliff_file):
     """
-    Parses a Crowdin XLIFF 1.2 file and writes ESO-tagged lines for entries with numeric resname
-    and target state 'translated' or 'final'.
+    Parses a Crowdin XLIFF 1.2 file and writes ESO-tagged lines for entries with numeric keys
+    from <context context-type="source"> and target state 'translated' or 'final'.
 
     Args:
-        xliff_path (str): Path to the input .xliff file.
-        output_txt_path (str): Path to the output .txt file in tagged lang format.
+        input_xliff_file (str): Path to the input .xliff file.
     """
     output_filename, _ = generate_output_filename(input_xliff_file, "xliff_file")
     context = ET.iterparse(input_xliff_file, events=("start", "end"))
     _, root = next(context)  # get root element
 
-    current_resname = None
+    current_key = None
     current_state = None
     current_text = None
     output_lines = []
 
     for event, elem in context:
         if event == "start":
-            if elem.tag.endswith("trans-unit"):
-                current_resname = elem.attrib.get("resname")
-            elif elem.tag.endswith("target"):
-                current_state = elem.attrib.get("state")
-        elif event == "end":
             if elem.tag.endswith("target"):
+                current_state = elem.attrib.get("state")
+
+        elif event == "end":
+            if elem.tag.endswith("context") and elem.attrib.get("context-type") == "source":
+                # Get key from <context>
+                current_key = clean_tagged_lang_key(elem.text.strip())
+
+            elif elem.tag.endswith("target"):
                 current_text = (elem.text or "").strip()
 
             elif elem.tag.endswith("trans-unit"):
-                # process if valid numeric resname and translated
-                if current_resname and reResNameId.match(current_resname):
-                    if current_state in ("translated", "final"):
-                        sectionId, sectionIndex, stringIndex = reResNameId.match(current_resname).groups()
-                        output_line = f"{{{{{sectionId}-{sectionIndex}-{stringIndex}:}}}}{current_text}"
-                        output_lines.append(output_line)
+                # Only process if the key is numeric and state is valid
+                if current_key and current_state in ("translated", "final"):
+                    output_line = f"{current_key}{current_text}"
+                    output_lines.append(output_line)
 
-                # clear variables and free memory
-                current_resname = None
+                # Reset for next unit
+                current_key = None
                 current_state = None
                 current_text = None
                 elem.clear()
                 root.clear()
 
+    # Write output
     with open(output_filename, "w", encoding="utf-8", newline='\n') as out_file:
         for line in output_lines:
             out_file.write(f"{line}\n")
@@ -2216,17 +2216,12 @@ def convert_xliff_to_tagged_lang_text(input_xliff_file):
     print(f"Parsed XLIFF written to: {output_filename}")
 
 
+
 @mainFunction
 def convert_tagged_lang_text_to_xliff(original_xliff_file, tagged_text_file):
     """
     Updates the <target> values in the original XLIFF with translations from a tagged text file.
-
-    Args:
-        tagged_text_path (str): Input tagged text file, lines like {{sectionId-sectionIndex-stringIndex:}}Text
-        original_xliff_path (str): Original XLIFF file from Crowdin (with full structure)
-
-    Output:
-        Creates a new .xliff with updated translations.
+    Forces &quot; in <source> and <target> elements when writing.
     """
     # 1. Read tagged text into dict
     translations = {}
@@ -2239,27 +2234,59 @@ def convert_tagged_lang_text_to_xliff(original_xliff_file, tagged_text_file):
                 text = re.sub(r"^\{\{.*?:\}\}", "", line).strip()
                 translations[key] = text
 
-    # 2. Parse original XLIFF
+    # 2. Parse original XLIFF using ET
     tree = ET.parse(original_xliff_file)
     root = tree.getroot()
 
-    # 3. Update <target> for matching resnames
+    # 3. Update <source> and <target> elements, enforcing &quot;
     for trans_unit in root.iterfind(".//{*}trans-unit"):
         resname = trans_unit.get("resname")
-        if resname and resname in translations:
-            target = trans_unit.find("{*}target")
 
+        # Handle <source>
+        source_elem = trans_unit.find("{*}source")
+        if source_elem is not None and source_elem.text:
+            source_elem.text = source_elem.text.replace('"', '&quot;')
+
+        # Handle <target>
+        target = trans_unit.find("{*}target")
+        if resname and resname in translations:
             if target is None:
                 target = ET.SubElement(trans_unit, "target")
 
-            target.text = translations[resname]
+            # Apply translation and enforce &quot;
+            text_to_write = translations[resname].replace('"', '&quot;')
+            target.text = text_to_write
             target.set("state", "translated")
+        elif target is not None and target.text:
+            # Keep existing target but enforce &quot;
+            target.text = target.text.replace('"', '&quot;')
 
-    # 4. Write updated XLIFF
-    output_filename, _ = generate_output_filename(original_xliff_file, "updated_xliff", file_extension="xliff")
+    # 4. Register namespace if needed
+    if root.tag.startswith("{"):
+        namespace_uri = root.tag[1:].split("}")[0]
+        if namespace_uri:
+            ET.register_namespace('', namespace_uri)
+
+    # 5. Write updated XLIFF using ET
+    output_filename, _ = generate_output_filename(
+        original_xliff_file, "updated_xliff", file_extension="xliff"
+    )
     tree.write(output_filename, encoding="utf-8", xml_declaration=True)
 
+    # 6. Post-process to fix double-escaped &quot; in <source> and <target>
+    with open(output_filename, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    with open(output_filename, "w", encoding="utf-8", newline='\n') as f:
+        for line in lines:
+            if "<source>" in line or "<target" in line:
+                line = line.replace('&amp;quot;', '&quot;')
+            f.write(line)
+
     print(f"Updated XLIFF created: {output_filename}")
+
+
+
 
 
 @mainFunction
