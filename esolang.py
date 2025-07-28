@@ -73,7 +73,7 @@ def main():
         for func in callable_functions:
             if func.__name__ == function_name:
                 func_args = args.args
-                if func == addIndexToLangFile and len(func_args) < 2:
+                if func == add_index_to_lang_file and len(func_args) < 2:
                     print("Usage: {} <txtFilename> <idFilename>".format(func.__name__))
                 else:
                     func(*func_args)
@@ -631,7 +631,7 @@ def parse_safe_add_string_line(line):
 
 # Conversion ------------------------------------------------------------------
 @mainFunction
-def addIndexToLangFile(txtFilename, idFilename):
+def add_index_to_lang_file(txtFilename, idFilename):
     """
     Add numeric identifiers as tags to language entries in a target file.
 
@@ -664,7 +664,7 @@ def addIndexToLangFile(txtFilename, idFilename):
         7949764-0-51729
         ```
 
-        Calling `addIndexToLangFile('en.lang.txt', 'en.lang.id.txt')` will produce an output file 'output.txt':
+        Calling `add_index_to_lang_file('en.lang.txt', 'en.lang.id.txt')` will produce an output file 'output.txt':
         ```
         {{18173141-0-2944:}}Hello, world!
         {{7949764-0-51729:}}How are you?
@@ -705,7 +705,7 @@ def addIndexToLangFile(txtFilename, idFilename):
 
 
 @mainFunction
-def removeIndexToLangFile(txtFilename):
+def remove_index_from_lang_file(txtFilename):
     """
     Remove numeric identifiers from language entries in a target file.
 
@@ -726,7 +726,7 @@ def removeIndexToLangFile(txtFilename):
         {{7949764-0-51729:}}How are you?
         ```
 
-        Calling `removeIndexToLangFile('en.lang.txt')` will produce an output file 'output.txt':
+        Calling `remove_index_from_lang_file('en.lang.txt')` will produce an output file 'output.txt':
         ```
         Hello, world!
         How are you?
@@ -916,7 +916,7 @@ def eso_to_korean(txtFilename):
 
 
 @mainFunction
-def addIndexToEosui(txtFilename):
+def add_index_to_eosui(txtFilename):
     """
     Add numeric tags to language entries in kr_client.str or kr_pregame.str for use with translation files.
 
@@ -939,7 +939,7 @@ def addIndexToEosui(txtFilename):
         [SI_PLAYER_LEVEL] = "Player Level"
         ```
 
-        Calling `addIndexToEosui('kr_client.str')` will produce an output file 'output.txt':
+        Calling `add_index_to_eosui('kr_client.str')` will produce an output file 'output.txt':
         ```
         [SI_PLAYER_NAME] = "{C:1}Player Name"
         [SI_PLAYER_LEVEL] = "{C:2}Player Level"
@@ -1029,7 +1029,7 @@ def addIndexToEosui(txtFilename):
 
 
 @mainFunction
-def removeIndexFromEosui(txtFilename):
+def remove_index_from_eosui(txtFilename):
     """
     Remove tags and identifiers from either kr_client.str or kr_pregame.str for use with official release.
 
@@ -1051,7 +1051,7 @@ def removeIndexFromEosui(txtFilename):
         [SI_LOCATION_NAME] = "{C:10207}Gonfalon Bay"
         ```
 
-        Calling `removeIndexFromEosui('kr_client.str')` will produce an output file 'output.txt':
+        Calling `remove_index_from_eosui('kr_client.str')` will produce an output file 'output.txt':
         ```
         [SI_LOCATION_NAME] = "Gonfalon Bay"
         ```
@@ -1087,7 +1087,7 @@ def removeIndexFromEosui(txtFilename):
 
 
 @mainFunction
-def write_korean_file_with_fonts(source_filename):
+def write_client_file_with_fonts(source_filename):
     """
     Create a cleaned Korean ESOUI client file with custom font declarations prepended.
 
@@ -1320,7 +1320,7 @@ def build_section_constants(currentLanguageFile):
 
 
 @mainFunction
-def extractSectionEntries(langFile, section_arg, output_filename=None, output_folder=None, useName=True):
+def extract_section_entries(langFile, section_arg, output_filename=None, output_folder=None, useName=True):
     """
     Extracts all entries from a language file for a specific section (by name or ID).
     """
@@ -1360,7 +1360,7 @@ def extractSectionEntries(langFile, section_arg, output_filename=None, output_fo
 
 
 @mainFunction
-def extractAllSections(langFile):
+def extract_all_sections(langFile):
     """
     Extract all known sections from a .lang file using section_info
     and write each one to tagged_text/<sectionId><lang_suffix>.txt.
@@ -1371,7 +1371,7 @@ def extractAllSections(langFile):
     for section_key, section_data in section.section_info.items():
         section_id = section_data['sectionId']
         print(f"Processing section: {section_id}...")
-        extractSectionEntries(
+        extract_section_entries(
             langFile=langFile,
             section_arg=section_id,
             output_filename=None,
@@ -1739,27 +1739,26 @@ def merge_section_into_lang(main_lang_file, source_lang_file):
 
 
 @mainFunction
-def merge_client_strings(main_client_file, source_client_file):
+def merge_esoui_client_files(main_client_file, source_client_file):
     """
-    Merge two ESOUI-format language files, replacing entries in the main file with those from the source file.
+    Merge translations from a source ESOUI-format file into a main client file.
 
     This function reads:
-      - A **main_lang_file**: the primary language file to preserve and write to.
-      - A **source_lang_file**: another language file containing updated or alternative entries.
+      - A **main_client_file**: the ESOUI client file to update (e.g. `ko_client.str` or `ko_client.lua`).
+      - A **source_client_file**: a file containing translations (e.g. generated from XLIFF).
 
-    Any matching keys found in both files will be replaced in the output with the string from the source file.
+    Any matching keys found in both files will have the **value in the main file replaced with the value from the source file**.
 
     Args:
-        main_lang_file (str): The main ESOUI-format language file (e.g. `ko.lang`, `en.lang`) to merge into.
-        source_lang_file (str): The ESOUI-format file providing replacement strings.
+        main_client_file (str): The target ESOUI-format client file to merge into (e.g. `ko_client.str`).
+        source_client_file (str): The ESOUI-format file providing updated translations.
 
     Output:
-        A merged .lang file with updated strings written to a new file (e.g., `ko_merged.lang`).
+        A merged `.txt` file (e.g., `ko_client_merged_esoui.txt`) with updated strings.
 
     Notes:
-        - This assumes both files are valid ESOUI-format .lang files.
-        - No validation or version checks are performed; this is intended for up-to-date clean files.
-        - Output filename is auto-generated using `generate_output_filename()` with `"merged_esoui"` tag.
+        - This assumes both files are valid ESOUI-format client files.
+        - Only keys that already exist in the main client file will be updated.
     """
     output_filename, _ = generate_output_filename(main_client_file, "merged_esoui")
 
@@ -1836,7 +1835,7 @@ def rebuild_client_strings_from_merge(combined_client_file, source_client_file, 
 
 
 @mainFunction
-def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged_english_text, current_tagged_english_text):
+def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_tagged_english_text, current_tagged_english_text):
     """
     Compare translations between different versions of language files.
 
@@ -1935,7 +1934,7 @@ def compareTaggedLangFilesForTranslation(translated_tagged_text, previous_tagged
 
 
 @mainFunction
-def compareEsoUIFilesForTranslation(translated_string_file, current_english_string_file, previous_english_string_file):
+def compare_esoui_files_for_translation(translated_string_file, current_english_string_file, previous_english_string_file):
     """Compare ESOUI Text Files with Existing Translations.
 
     This function reads three input ESOUI text files: translated_string_file, previous_english_string_file, and current_english_string_file,
@@ -2111,7 +2110,7 @@ def read_tagged_text_to_dict(tagged_text_file):
 
 
 @mainFunction
-def rebuildLangFileFromLangFile(inputLangFile):
+def rebuild_lang_file_from_lang_file(inputLangFile):
     """
     Reads a language file, identifies duplicate strings, and ensures that repeated strings
     share the same offset in the output. This rebuilds the language file so that identical
@@ -2135,7 +2134,7 @@ def rebuildLangFileFromLangFile(inputLangFile):
 
 
 @mainFunction
-def rebuildLangFileFromTaggedText(input_tagged_file):
+def rebuild_lang_file_from_tagged_text(input_tagged_file):
     """
     Reads a language file, identifies duplicate strings, and ensures that repeated strings
     share the same offset in the output. This rebuilds the language file so that identical
@@ -2357,7 +2356,7 @@ def convert_esoui_to_xliff(original_xliff_file, esoui_file):
 
     # 5. Write updated XLIFF with detected namespace
     output_filename, _ = generate_output_filename(esoui_file, "esoui_converted_xliff", file_extension="xliff")
-    tree.write(output_filename, encoding="utf-8", xml_declaration=True, short_empty_elements=False)
+    tree.write(output_filename, encoding="utf-8", newline='\n', xml_declaration=True, short_empty_elements=False)
 
     # Post-process to replace \" with \&quot; in <source> and <target> lines
     with open(output_filename, "r", encoding="utf-8") as f:
@@ -2373,7 +2372,7 @@ def convert_esoui_to_xliff(original_xliff_file, esoui_file):
 
 
 @mainFunction
-def diffEnglishLangFiles(current_english_input_file, previous_english_input_file):
+def diff_english_lang_files(current_english_input_file, previous_english_input_file):
     """
     Compare differences between the current and previous 'en.lang' files after tagging.
 
