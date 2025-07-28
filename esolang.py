@@ -248,7 +248,7 @@ def normalize_crowdin_csv_line(line):
 
 def clean_esoui_key(esoui_key):
     """
-    Removes brackets from a resname if present.
+    Removes brackets from a esoui_key if present.
 
     Example:
         "[SI_ABILITYPROGRESSIONRESULT5]" -> "SI_ABILITYPROGRESSIONRESULT5"
@@ -358,6 +358,9 @@ def readTaggedLangFile(taggedFile):
 
     Returns:
         dict: A dictionary of key-text pairs extracted from the file.
+
+    Example tagged entry:
+        {{12345-0-1:}}Translated text
     """
     targetDict = {}
     with open(taggedFile, 'r', encoding="utf8") as textIns:
@@ -551,20 +554,25 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
 
 def read_font_lines(fonts_filename):
     """
-    Read font tag lines from a .str file to reuse them in other output files.
+    Read font tag lines from a file to reuse them in other output files.
     
     Args:
-        fonts_filename (str): Filename containing font lines (e.g. kr_fonts.str)
+        fonts_filename (str): Filename containing font lines
 
     Returns:
         list[str]: Lines like [Font:ZoFontAlert] = "...", newline-stripped.
+
+    Example font entry:
+        [Font:ZoFontAnnounceLarge] = "EsoKR/fonts/univers47.slug|36|soft-shadow-thick"
     """
     font_lines = []
+
     with open(fonts_filename, 'r', encoding="utf8") as file:
         for line in file:
             line = line.rstrip()
             if reFontTag.match(line):
                 font_lines.append(line)
+
     return font_lines
 
 
@@ -1781,7 +1789,7 @@ def merge_esoui_client_files(main_client_file, source_client_file):
 
 
 @mainFunction
-def rebuild_client_strings_from_merge(combined_client_file, source_client_file, source_pregame_file):
+def distribute_esoui_to_source_files(combined_client_file, source_client_file, source_pregame_file):
     """
     Distribute strings from a merged combined ESOUI-format language file back into the original
     client and pregame files.
