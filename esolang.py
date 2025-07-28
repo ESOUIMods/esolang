@@ -231,6 +231,7 @@ def clean_esoui_key(esoui_key):
             return match.group(1)
     return esoui_key
 
+
 def clean_tagged_lang_key(key):
     """
     Formats numeric keys into {{key:}} style for tagged lang files.
@@ -259,6 +260,7 @@ def clean_tagged_lang_key(key):
 
     # Fallback: wrap key with trailing colon
     return f"{{{{{key}:}}}}"
+
 
 def readExtendedChar(file):
     """
@@ -2216,7 +2218,6 @@ def convert_xliff_to_tagged_lang_text(input_xliff_file):
     print(f"Parsed XLIFF written to: {output_filename}")
 
 
-
 @mainFunction
 def convert_tagged_lang_text_to_xliff(original_xliff_file, tagged_text_file):
     """
@@ -2284,9 +2285,6 @@ def convert_tagged_lang_text_to_xliff(original_xliff_file, tagged_text_file):
             f.write(line)
 
     print(f"Updated XLIFF created: {output_filename}")
-
-
-
 
 
 @mainFunction
