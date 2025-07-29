@@ -367,7 +367,7 @@ section_info = {
     227233909: {'numStrings': 2, 'maxStringLength': 7, 'sectionName': 'section_unknown_321'},
     227804446: {'numStrings': 13, 'maxStringLength': 81, 'sectionName': 'section_unknown_322'},
     228103012: {'numStrings': 26794, 'maxStringLength': 100, 'sectionName': 'quest_dialogue_choice_228'},
-    228378404: {'numStrings': 26619, 'maxStringLength': 256, 'sectionName': 'section_unknown_323'},
+    228378404: {'numStrings': 26619, 'maxStringLength': 256, 'sectionName': 'writ_flavor_text'},
     229689221: {'numStrings': 2, 'maxStringLength': 10, 'sectionName': 'section_unknown_324'},
     230486948: {'numStrings': 3, 'maxStringLength': 215, 'sectionName': 'section_unknown_325'},
     232026500: {'numStrings': 4204, 'maxStringLength': 100, 'sectionName': 'section_unknown_326'},
