@@ -92,7 +92,7 @@ reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 reTaggedLangWithRange = re.compile(r'^\{\{(\d+-\d+-\d+)(?::(\d+),(\d+))?\}\}(.*)$')
 
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
-reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
+reGrammaticalSuffix = re.compile(r'\^[fFmMnNpPzZ+]')
 
 # Matches a language index in the format {{identifier:}}text
 reLangIndex = re.compile(r'^\{\{([^:]+):\}\}(.+?)$')
@@ -655,7 +655,7 @@ def normalize_map_key(path, strip_ui_map=False, keep_map_num=True):
 
 
 @mainFunction
-def find_missing_maps(lua_file, dds_file, strip_ui_map=False, keep_map_num=True, zone_prefix=None, output_file=None):
+def find_missing_maps(lua_file, dds_file, output_file=None, strip_ui_map=False, keep_map_num=True, zone_prefix=None):
     """
     Compare map keys from Lua with DDS filenames, emulating LibMapPins behavior.
     """
@@ -1071,6 +1071,179 @@ def create_po_from_itemnames_dat(translated_txt, english_txt):
 
     po.save(output_po)
     print(f"Merged PO written to: {output_po}")
+
+
+def _is_empty(v):
+    return v is None or (isinstance(v, str) and v == "")
+
+
+@mainFunction
+def dump_styles_fields(input_path):
+    """
+    Parse DumpStyles.lua (top-level table with ['styles']) and write lines to style_dump.txt.
+    Heuristics (adjust as needed):
+      - If both stylePath and itemStyleMaterialLink are empty:
+          - if names are empty => IIFA_CUSTOM_ICON_DO_NOT_USE
+          - else               => IIFA_CUSTOM_ICON_NONE
+      - Else if styleNameIIfA present => getCustomStyleIconPath("<styleNameIIfA>")
+      - Else                          => IIFA_CUSTOM_ICON_USE_API
+    """
+    with open(input_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+    data = lua.decode(raw)
+
+    styles = data.get("styles")
+    if not isinstance(styles, dict):
+        raise ValueError("[IIfA] 'styles' table not found.")
+
+    # Sort by numeric style id for stable output
+    style_ids = sorted(styles.keys(), key=lambda x: int(x))
+
+    with open("style_dump.txt", "w", encoding="utf-8", newline="\n") as out:
+        out.write("IIfA.racialTextures = {\n")
+        for style_id in style_ids:
+            entry = styles[style_id] or {}
+            item_link = entry.get("itemStyleMaterialLink", "")
+            style_name_iifa = entry.get("styleNameIIfA", "")
+            style_name = entry.get("stylename", "")
+            style_path = entry.get("stylePath", "")
+
+            # Decide styleTexture
+            if _is_empty(style_path) and _is_empty(item_link):
+                if _is_empty(style_name) and _is_empty(style_name_iifa):
+                    style_texture = "IIFA_CUSTOM_ICON_DO_NOT_USE"
+                else:
+                    style_texture = "IIFA_CUSTOM_ICON_NONE"
+            else:
+                style_texture = "IIFA_CUSTOM_ICON_USE_API"
+
+            # Fallbacks for comment text
+            c_name = style_name if not _is_empty(style_name) else "Unknown"
+            c_iifa = style_name_iifa if not _is_empty(style_name_iifa) else "Unknown"
+
+            line = f"  [{style_id}] = {{ styleTexture = {style_texture} }}, -- {c_name}, {c_iifa}\n"
+            out.write(line)
+
+        out.write("}\n")
+
+
+def lua_array_to_lines(lua_text):
+    """Parse a Lua table like {[1]="a", [2]="b", ...} into 'a\\nb\\n...'."""
+    tbl = lua.decode(lua_text)
+
+    # slpp may return a dict (numeric keys) or a list; handle both.
+    if isinstance(tbl, dict):
+        values = [tbl[i] for i in sorted(tbl.keys())]
+    else:
+        values = list(tbl)
+
+    return "\n".join(values)
+
+
+@mainFunction
+def convert_lua_map_names_to_text(in_path):
+    with open(in_path, "r", encoding="utf-8") as f:
+        lua_text = f.read()
+    lines = lua_array_to_lines(lua_text)
+    with open("mapnames_output.txt", "w", encoding="utf-8", newline="\n") as f:
+        f.write(lines + "\n")
+
+
+@mainFunction
+def build_lqd_mapindex_files(input_file, output_folder="mapIndex_files"):
+    """
+    Reads LibQuestHelper.lua and extracts
+    LibQuestHelper_SavedVariables["location_data_by_mapIndex"].
+
+    Generates one Lua file per mapIndex in the output folder.
+
+    Args:
+        input_file (str):
+            Path to LibQuestHelper.lua.
+
+        output_folder (str):
+            Folder where generated mapIndex files are written.
+    """
+
+    print("Opening file:", input_file)
+    print("Output folder:", output_folder)
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    print("Input file size:", len(raw))
+
+    raw = re.sub(
+        r'^\s*LibQuestHelper_SavedVariables\s*=\s*',
+        '',
+        raw,
+        count=1
+    )
+
+    print("Decoding Lua table...")
+
+    table_data = lua.decode(raw)
+
+    if not table_data:
+        raise ValueError("Lua decode returned empty data.")
+
+    print("Top level keys found:", list(table_data.keys())[:10])
+
+    if "location_data_by_mapIndex" not in table_data:
+        raise ValueError('Could not find "location_data_by_mapIndex" in Lua file.')
+
+    table_data = table_data["location_data_by_mapIndex"]
+
+    print("Map index count:", len(table_data))
+
+    generated_count = 0
+
+    for map_index_name in sorted(table_data.keys()):
+
+        print("Processing:", map_index_name)
+
+        map_data = table_data[map_index_name]
+
+        output_lines = []
+
+        output_lines.append('local lib = _G["LibQuestData"]')
+        output_lines.append("")
+        output_lines.append(f"function lib:{map_index_name}_Quests()")
+        output_lines.append("  self.currentQuestMapIndexQuests = {")
+
+        for map_id in sorted(map_data.keys()):
+
+            print("  MapId:", map_id)
+
+            quest_table = map_data[map_id]
+
+            output_lines.append(f"    [{map_id}] = ")
+            output_lines.append("    {")
+
+            for index in sorted(quest_table.keys()):
+                quest_string = quest_table[index]
+                output_lines.append(f'      [{index}] = "{quest_string}",')
+
+            output_lines.append("    },")
+
+        output_lines.append("  }")
+        output_lines.append("end")
+        output_lines.append("")
+
+        output_text = "\n".join(output_lines)
+
+        output_filename = os.path.join(output_folder, f"{map_index_name}.lua")
+
+        print("Writing:", output_filename)
+
+        with open(output_filename, "w", encoding="utf-8", newline="\n") as f:
+            f.write(output_text)
+
+        generated_count += 1
+
+    print("Generated {} mapIndex files.".format(generated_count))
 
 
 if __name__ == "__main__":

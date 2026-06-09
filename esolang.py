@@ -99,7 +99,7 @@ reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 reTaggedLangWithRange = re.compile(r'^\{\{(\d+-\d+-\d+)(?::(\d+),(\d+))?\}\}(.*)$')
 
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
-reGrammaticalSuffix = re.compile(r'\^[fFmMnNpP]')
+reGrammaticalSuffix = re.compile(r'\^[fFmMnNpPzZ+]')
 
 # Matches a language index in the format {{identifier:}}text
 reLangIndex = re.compile(r'^\{\{([^:]+):\}\}(.+?)$')
@@ -1261,7 +1261,7 @@ def processSectionIDs(currentFileIndexes, outputFileName):
 
     # Build lookup of known sectionId -> name
     known_names = {
-        sid: info.get("sectionName", f"section_unknown_{sid}")
+        sid: info.get("sectionName", "")
         for sid, info in section.section_info.items()
     }
 
@@ -1271,33 +1271,39 @@ def processSectionIDs(currentFileIndexes, outputFileName):
     for index in range(numIndexes):
         currentIndex = currentFileIndexes[index]
         sectionId = currentIndex['sectionId']
-        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(
-            currentIndex['string'])
+        stringValue = currentIndex['string'].decode('utf-8', errors='replace') if isinstance(currentIndex['string'], bytes) else str(currentIndex['string'])
         stringLength = len(stringValue)
 
         if sectionId != currentSection:
             # Save previous section info
             if currentSection is not None:
                 known_key = known_names.get(currentSection)
-                name = known_key if known_key else f"section_unknown_{sectionCount}"
+
+                if known_key and not known_key.startswith("section_unknown_"):
+                    name = known_key
+                else:
+                    name = f"section_unknown_{sectionCount}"
+                    sectionCount += 1
+
                 section_lines.append(
                     f"    {currentSection}: {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionName': '{name}'}},"
                 )
 
-                if not known_key:
-                    sectionCount += 1
-
-            # Start new section
             currentSection = sectionId
             current_string_count = 1
             current_max_length = stringLength
+
         else:
             current_string_count += 1
             current_max_length = max(current_max_length, stringLength)
 
-    # Final section
+    # Final section write-out
     if currentSection is not None:
-        name = known_names.get(currentSection, f"section_unknown_{sectionCount}")
+        known_key = known_names.get(currentSection)
+        if known_key and not known_key.startswith("section_unknown_"):
+            name = known_key
+        else:
+            name = f"section_unknown_{sectionCount}"
         section_lines.append(
             f"    {currentSection}: {{'numStrings': {current_string_count}, 'maxStringLength': {current_max_length}, 'sectionName': '{name}'}},"
         )
@@ -1977,7 +1983,7 @@ def compare_esoui_files_for_translation(translated_string_file, current_english_
             translatedText = textTranslatedDict.get(key)
             current_text = textCurrentUntranslatedDict.get(key)
             previous_text = textPreviousUntranslatedDict.get(key)
-            maEmptyString = reEmptyString.match(previous_text)
+            maEmptyString = reEmptyString.match(current_text)
             if maEmptyString:
                 conIndex = maEmptyString.group(1)
                 out.write(f'[{conIndex}] = ""\n')
@@ -2145,17 +2151,18 @@ def rebuild_lang_file_from_lang_file(inputLangFile):
 @mainFunction
 def rebuild_lang_file_from_tagged_text(input_tagged_file):
     """
-    Reads a language file, identifies duplicate strings, and ensures that repeated strings
-    share the same offset in the output. This rebuilds the language file so that identical
-    strings are stored only once.
+    Reads a tagged language text file and rebuilds a .lang file using the
+    identifiers stored in each tag.
 
     Args:
-        inputLangFile (str): The name of the input .lang file (e.g. 'en.lang', 'ko.lang').
+        input_tagged_file (str): The name of the tagged language text file
+            (e.g. 'en_tagged_lang_text.txt', 'ko_tagged_lang_text.txt').
 
     Output:
-        {prefix}_output_{suffix}.lang: the optimized language file
+        {prefix}_rebuilt_tagged_lang_file.lang: the rebuilt language file
 
-        For example, if the input is 'en.lang', the output will be 'en_output.lang'.
+        For example, if the input is 'en_tagged_lang_text.txt', the output
+        will be 'en_rebuilt_tagged_lang_file.lang'.
     """
     output_filename, _ = generate_output_filename(input_tagged_file, "rebuilt_tagged_lang_file", file_extension="lang")
 
