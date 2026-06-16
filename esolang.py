@@ -128,6 +128,8 @@ reResNameId = re.compile(r'^(\d+)-(\d+)-(\d+)$')
 # Matches ESO color tags in the format |cFFFFFF (start color) and |r (reset color)
 reColorTag = re.compile(r'\|c[0-9A-Fa-f]{6}|\|r')
 
+reEsoTexturePath = re.compile(r'(EsoUI/[^"\')\s|]+?\.dds)', re.IGNORECASE)
+
 # Global Dictionaries ---------------------------------------------------------
 textCurrentUntranslatedDict = {}
 textPreviousUntranslatedDict = {}
@@ -143,6 +145,16 @@ previousFileIndexes = {}
 previousFileStrings = {}
 translatedFileIndexes = {}
 translatedFileStrings = {}
+
+SPECIAL_LANGUAGE_NAMES = {
+    "SI_OFFICIALLANGUAGE0": "English",
+    "SI_OFFICIALLANGUAGE1": "Français",
+    "SI_OFFICIALLANGUAGE2": "Deutsch",
+    "SI_OFFICIALLANGUAGE3": "日本語",
+    "SI_OFFICIALLANGUAGE4": "Русский",
+    "SI_OFFICIALLANGUAGE5": "Español",
+    "SI_OFFICIALLANGUAGE6": "简体中文",
+}
 
 
 # Helper for escaped chars ----------------------------------------------------
@@ -401,7 +413,7 @@ def calculate_similarity_ratio(text1, text2):
     return similarity_ratio > 0.6
 
 
-def isFallbackEnglish(translated, current_text, previous_text):
+def isFallbackEnglish(translated, previous_text, current_text):
     return (translated == previous_text and translated != current_text) or (translated == current_text)
 
 
@@ -411,6 +423,23 @@ def isIdenticalText(current_text, previous_text):
 
 def isSimilarText(current_text, previous_text):
     return calculate_similarity_ratio(current_text, previous_text)
+
+
+def calculate_english_fallback_similarity_ratio(text1, text2):
+    if text1 is None or text2 is None:
+        return False
+
+    subText1 = reColorTag.sub('', text1)
+    subText2 = reColorTag.sub('', text2)
+    subText1 = reGrammaticalSuffix.sub('', subText1)
+    subText2 = reGrammaticalSuffix.sub('', subText2)
+
+    similarity_ratio = SequenceMatcher(None, subText1, subText2).ratio()
+    return 0.73 < similarity_ratio < 0.95
+
+
+def isSimilarEnglishFallbackText(translated_text, current_text):
+    return calculate_english_fallback_similarity_ratio(translated_text, current_text)
 
 
 def isTranslatedText(text):
@@ -428,6 +457,9 @@ def isTranslatedText(text):
             text = text.decode("utf-8", errors="ignore")
         except Exception:
             return False
+
+    # Normalize punctuation and hidden formatting before language detection
+    text = cleanText(text)
 
     # Now guaranteed to be a str from here onward
     if any(ord(char) > 127 for char in text):
@@ -556,7 +588,7 @@ def generate_output_filename(translated_file, name_text=None, file_extension=Non
 def read_font_lines(fonts_filename):
     """
     Read font tag lines from a file to reuse them in other output files.
-    
+
     Args:
         fonts_filename (str): Filename containing font lines
 
@@ -645,8 +677,9 @@ def add_index_to_lang_file(txtFilename, idFilename):
     Add numeric identifiers as tags to language entries in a target file.
 
     This function reads a source text file containing language data and a corresponding identifier file
-    containing unique numeric identifiers for each language entry. It then appends these identifiers as tags
-    to the respective lines in the target language file. The resulting output is saved in a new file named 'output.txt'.
+    containing unique numeric identifiers for each language entry. It appends these identifiers as tags
+    to the matching lines in the target language file and writes the result to a filename generated from
+    txtFilename with the add_lang_index suffix.
 
     Args:
         txtFilename (str): The filename of the source text file containing language data (e.g., 'en.lang.txt').
@@ -656,9 +689,6 @@ def add_index_to_lang_file(txtFilename, idFilename):
     Notes:
         The source text file should contain text data, one entry per line, while the identifier file should
         contain numeric identifiers corresponding to each entry in the same order.
-
-        The function reads both files, associates numeric identifiers with their respective entries, and appends
-        these identifiers as tags in the output file. The output file is saved in the same directory as the script.
 
     Example:
         Given a source text file 'en.lang.txt':
@@ -673,12 +703,11 @@ def add_index_to_lang_file(txtFilename, idFilename):
         7949764-0-51729
         ```
 
-        Calling `add_index_to_lang_file('en.lang.txt', 'en.lang.id.txt')` will produce an output file 'output.txt':
+        Calling `add_index_to_lang_file('en.lang.txt', 'en.lang.id.txt')` will produce a generated output file:
         ```
         {{18173141-0-2944:}}Hello, world!
         {{7949764-0-51729:}}How are you?
         ```
-
     """
     textLines = []
     idLines = []
@@ -719,14 +748,14 @@ def remove_index_from_lang_file(txtFilename):
     Remove numeric identifiers from language entries in a target file.
 
     This function reads a target text file containing language entries with numeric identifiers as tags
-    and removes these identifiers, resulting in a clean language text file. The output is saved in a new file named 'output.txt'.
+    and removes these identifiers, resulting in a clean language text file. The result is written to a
+    filename generated from txtFilename with the remove_lang_index suffix.
 
     Args:
         txtFilename (str): The filename of the target text file containing language entries with identifiers (e.g., 'en.lang.txt').
 
     Notes:
         The function uses regular expressions to detect and remove numeric identifiers that are enclosed in double curly braces.
-        It then writes the cleaned entries to the output file 'output.txt' in the same directory as the script.
 
     Example:
         Given a target text file 'en.lang.txt':
@@ -735,12 +764,11 @@ def remove_index_from_lang_file(txtFilename):
         {{7949764-0-51729:}}How are you?
         ```
 
-        Calling `remove_index_from_lang_file('en.lang.txt')` will produce an output file 'output.txt':
+        Calling `remove_index_from_lang_file('en.lang.txt')` will produce a generated output file:
         ```
         Hello, world!
         How are you?
         ```
-
     """
 
     # Get ID numbers ------------------------------------------------------
@@ -776,7 +804,8 @@ def korean_to_eso(txtFilename):
     This function reads a source text file containing Korean UTF-8 encoded text and applies a byte offset to convert it to
     Chinese UTF-8 encoded text. The byte offset is used to shift the Korean text to a range that is normally occupied by
     Chinese characters. This technique is used in Elder Scrolls Online (ESO) to display Korean text using a nonstandard font
-    that resides in the Chinese character range. The converted text is saved in a new file with a descriptive output name.
+    that resides in the Chinese character range. The converted text is written to a filename generated from txtFilename with
+    the koreanToEso suffix.
 
     Args:
         txtFilename (str): The filename of the source text file containing Korean UTF-8 encoded text.
@@ -792,7 +821,7 @@ def korean_to_eso(txtFilename):
         나는 가고 싶다
         ```
 
-        Calling `koreanToEso('korean.txt')` will produce an output file 'output.txt':
+        Calling `koreanToEso('korean.txt')` will produce a generated output file:
         ```
         犘璔 渀滠 蓶瓤
         ```
@@ -853,8 +882,8 @@ def eso_to_korean(txtFilename):
     This function reads a source text file containing Chinese UTF-8 encoded text and applies an opposite byte offset to
     convert it to traditional Korean UTF-8 encoded text. The byte offset reversal is used to shift the Chinese text back
     to its original traditional Korean character range. This technique is used when working with Chinese text that has
-    been encoded using a byte offset to simulate Korean characters. The converted text is saved in a new file with a
-    descriptive output filename.
+    been encoded using a byte offset to simulate Korean characters. The converted text is written to a filename generated
+    from txtFilename with the esoToKorean suffix.
 
     Args:
         txtFilename (str): The filename of the source text file containing Chinese UTF-8 encoded text (e.g., 'kr.lang.txt').
@@ -871,7 +900,7 @@ def eso_to_korean(txtFilename):
         犘璔 渀滠 蓶瓤
         ```
 
-        Calling `esoToKorean('kr.lang.txt')` will produce an output file 'output.txt':
+        Calling `esoToKorean('kr.lang.txt')` will produce a generated output file:
         ```
         나는 가고 싶다
         ```
@@ -927,19 +956,19 @@ def eso_to_korean(txtFilename):
 @mainFunction
 def add_index_to_eosui(txtFilename):
     """
-    Add numeric tags to language entries in kr_client.str or kr_pregame.str for use with translation files.
+    Add numeric tags to ESOUI language entries for use with translation files.
 
-    This function reads a target text file containing language entries in the format of [key] = "value" pairs,
-    such as 'kr_client.str' or 'kr_pregame.str'. It then adds numeric tags to the entries and generates new entries
-    with the format [key] = "{C:numeric_tag}value" or [key] = "{P:numeric_tag}value", based on whether the entries
-    are intended for the client or pregame context.
+    This function reads a target text file containing language entries in the format of [key] = "value" pairs.
+    It adds numeric tags to matching entries and writes the result to a filename generated from txtFilename with
+    the add_esoui_index suffix.
 
     Args:
-        txtFilename (str): The filename of the target text file containing language entries (e.g., 'kr_client.str' or 'kr_pregame.str').
+        txtFilename (str): The filename of the target text file containing ESOUI language entries,
+                           such as 'kr_client.str' or 'kr_pregame.str'.
 
     Notes:
         - The function uses regular expressions to detect and modify the entries.
-        - Entries listed in the 'no_prefix_indexes' list will retain their original format without numeric tags.
+        - Entries listed in the no_prefix_indexes list retain their original format without numeric tags.
 
     Example:
         Given a target text file 'kr_client.str':
@@ -948,7 +977,8 @@ def add_index_to_eosui(txtFilename):
         [SI_PLAYER_LEVEL] = "Player Level"
         ```
 
-        Calling `add_index_to_eosui('kr_client.str')` will produce an output file 'output.txt':
+        Calling `add_index_to_eosui('kr_client.str')` will produce a generated output file such as
+        'kr_client_add_esoui_index.txt':
         ```
         [SI_PLAYER_NAME] = "{C:1}Player Name"
         [SI_PLAYER_LEVEL] = "{C:2}Player Level"
@@ -1040,19 +1070,18 @@ def add_index_to_eosui(txtFilename):
 @mainFunction
 def remove_index_from_eosui(txtFilename):
     """
-    Remove tags and identifiers from either kr_client.str or kr_pregame.str for use with official release.
+    Remove ESOUI translation tags from tagged client or pregame entries.
 
-    This function reads a target text file containing entries with tags and identifiers and removes these tags and identifiers,
-    resulting in a clean language text file. The output is saved in a new file named 'output.txt'.
+    This function reads a target text file containing entries with {C:n} or {P:n} tags, removes those tags,
+    and writes the clean entries to a filename generated from txtFilename with the remove_esoui_index suffix.
 
     Args:
-        txtFilename (str): The filename of the target text file containing entries with tags and identifiers
-                          (e.g., 'kr_client.str' or 'kr_pregame.str').
+        txtFilename (str): The filename of the target text file containing tagged ESOUI entries,
+                           such as 'kr_client.str' or 'kr_pregame.str'.
 
     Notes:
-        - The function uses regular expressions to detect and remove tags, identifiers, and empty lines.
+        - The function uses regular expressions to detect and remove client and pregame tags.
         - Entries containing '[Font:' are skipped, as well as empty lines.
-        - The cleaned entries are written to the output file 'output.txt' in the same directory as the script.
 
     Example:
         Given a target text file 'kr_client.str':
@@ -1060,7 +1089,8 @@ def remove_index_from_eosui(txtFilename):
         [SI_LOCATION_NAME] = "{C:10207}Gonfalon Bay"
         ```
 
-        Calling `remove_index_from_eosui('kr_client.str')` will produce an output file 'output.txt':
+        Calling `remove_index_from_eosui('kr_client.str')` will produce a generated output file such as
+        'kr_client_remove_esoui_index.txt':
         ```
         [SI_LOCATION_NAME] = "Gonfalon Bay"
         ```
@@ -1337,7 +1367,18 @@ def build_section_constants(currentLanguageFile):
 @mainFunction
 def extract_section_entries(langFile, section_arg, output_filename=None, output_folder=None, useName=True):
     """
-    Extracts all entries from a language file for a specific section (by name or ID).
+    Extract all entries from a language file for a specific numeric section ID.
+
+    The output filename is generated from langFile, the section ID, and the section name when useName is true.
+    If output_folder is provided, the generated file is written inside that folder. Output lines use tagged
+    language format: {{sectionId-sectionIndex-stringId:}}text.
+
+    Args:
+        langFile (str): Path to the input .lang file.
+        section_arg (str | int): Numeric section ID to extract.
+        output_filename (str | None): Optional explicit base output filename.
+        output_folder (str | None): Optional folder for the generated output file.
+        useName (bool): Include the section name in the generated output filename when possible.
     """
     # Determine section_id and section_name
     if isinstance(section_arg, int) or str(section_arg).isdigit():
@@ -1377,21 +1418,24 @@ def extract_section_entries(langFile, section_arg, output_filename=None, output_
 @mainFunction
 def extract_all_sections(langFile):
     """
-    Extract all known sections from a .lang file using section_info
-    and write each one to tagged_text/<sectionId><lang_suffix>.txt.
+    Extract every known section from a .lang file.
+
+    For each section in section.section_info, this calls extract_section_entries() with that section ID
+    and writes the tagged output into the tagged_text folder. Because useName=True is passed, each output
+    file is generated with the section ID and section name when possible.
 
     Args:
         langFile (str): Path to the input .lang file (e.g., 'en_cur.lang').
     """
-    for section_key, section_data in section.section_info.items():
-        section_id = section_data['sectionId']
-        print(f"Processing section: {section_id}...")
+    for section_id, section_data in section.section_info.items():
+        section_name = section_data.get('sectionName')
+        print(f"Processing section: {section_id} ({section_name})...")
         extract_section_entries(
             langFile=langFile,
             section_arg=section_id,
             output_filename=None,
             output_folder="tagged_text",
-            useName=False
+            useName=True
         )
 
 
@@ -1401,7 +1445,7 @@ def process_eosui_client_file(input_filename):
     and return a dictionary of extracted key-text entries.
 
     Args:
-        filename (str): The filename of the ESOUI text file to process.
+        input_filename (str): The filename of the ESOUI text file to process.
 
     Returns:
         dict: A dictionary mapping keys to extracted text.
@@ -1433,8 +1477,9 @@ def combine_client_files(client_filename, pregame_filename):
 
     This function reads the content of en_client.str and en_pregame.str files, extracts
     constant entries that match the pattern defined by reClientUntaged or reEmptyString,
-    and saves the combined information into an 'output.txt' file. If a constant exists
-    in both files, only one entry will be written to eliminate duplication.
+    and writes the combined information to a filename generated from client_filename with
+    the combined_files suffix. If a constant exists in both files, only one entry is written
+    to eliminate duplication.
 
     Args:
         client_filename (str): The filename of the en_client.str file.
@@ -1451,7 +1496,7 @@ def combine_client_files(client_filename, pregame_filename):
         And en_pregame.str:
             [SI_CONSTANT] = "Some Constant Text"
             [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
-        Will produce output.txt:
+        The generated output file will contain:
             [SI_MY_CONSTANT] = "My Constant Text"
             [SI_CONSTANT] = "Some Constant Text"
             [SI_ADDITIONAL_CONSTANT] = "Additional Constant Text"
@@ -1485,12 +1530,151 @@ def combine_client_files(client_filename, pregame_filename):
 
 @mainFunction
 def find_long_po_entries(po_file, limit=512):
+    """
+    Find translation entries whose text exceeds 512 characters.
+    """
     po = polib.pofile(po_file)
     for entry in po:
         if len(entry.msgid) > limit:
             print(f"Long msgid ({len(entry.msgid)} chars) at key: {entry.msgctxt}")
         if len(entry.msgstr) > limit:
             print(f"Long msgstr ({len(entry.msgstr)} chars) at key: {entry.msgctxt}")
+
+
+def is_inside_eso_placeholder(text, pos):
+    """
+    Return True if pos is inside an ESO placeholder such as:
+        <<1>>
+        <<1[/character/characters]>>
+        <<t:1>>
+        <<C:1>>
+
+    This prevents PO splitting inside <<...>> tokens.
+    """
+    last_open = text.rfind("<<", 0, pos)
+    last_close = text.rfind(">>", 0, pos)
+    return last_open > last_close
+
+
+def is_after_protected_newline(text, pos):
+    """
+    preserve_escaped_sequences() changes \\n into -=CR=-.
+    This returns True only when pos is immediately after the full marker.
+    """
+    return text[max(0, pos - 6):pos] == "-=CR=-"
+
+
+def is_inside_protected_marker(text, pos):
+    """
+    Prevent splitting inside preserved escape markers:
+        -=CR=-
+        -=EQ=-
+        -=DS=-
+
+    Splitting immediately before or after the full marker is allowed.
+    Splitting inside the marker is not allowed.
+    """
+    markers = ("-=CR=-", "-=EQ=-", "-=DS=-")
+
+    for marker in markers:
+        for match in re.finditer(re.escape(marker), text):
+            start = match.start()
+            end = match.end()
+
+            if start < pos < end:
+                return True
+
+    return False
+
+
+def get_preferred_po_split_positions(text, locale):
+    """
+    Build a list of safe candidate split positions.
+
+    ICU still supplies the language-aware word boundaries.
+    Extra positions are added for protected \\n and whitespace.
+    Unsafe positions inside ESO placeholders or protected markers are removed.
+    """
+    positions = set()
+
+    # ICU language-aware word boundaries.
+    word_bi = BreakIterator.createWordInstance(Locale(locale))
+    word_bi.setText(text)
+    for pos in word_bi:
+        positions.add(pos)
+
+    # Explicitly add positions after preserved escaped newlines.
+    for match in re.finditer(r"-=CR=-", text):
+        positions.add(match.end())
+
+    # Prefer natural sentence-ending whitespace where possible.
+    for match in re.finditer(r"(?<=[.!?。！？])\s+", text):
+        positions.add(match.end())
+
+    # General whitespace fallback.
+    for match in re.finditer(r"\s+", text):
+        positions.add(match.end())
+
+    safe_positions = []
+    for pos in sorted(positions):
+        if pos <= 0 or pos >= len(text):
+            continue
+
+        if is_inside_eso_placeholder(text, pos):
+            continue
+
+        if is_inside_protected_marker(text, pos):
+            continue
+
+        safe_positions.append(pos)
+
+    return safe_positions
+
+
+def choose_po_split_position(text, start, max_len, locale):
+    """
+    Choose a split point near start + max_len.
+
+    Priority:
+    1. Prefer a safe boundary close to max_len.
+    2. Prefer a protected newline only if it is close enough.
+    3. Otherwise use the closest ICU/whitespace boundary before max_len.
+    4. If there is no safe boundary before max_len, use the first safe one after.
+    """
+    target = start + max_len
+
+    if target >= len(text):
+        return len(text)
+
+    near_window = 100
+    near_start = max(start + 1, target - near_window)
+
+    positions = [
+        pos for pos in get_preferred_po_split_positions(text, locale)
+        if pos > start
+    ]
+
+    # Prefer protected \n only when it is close enough to the target.
+    linefeed_before = [
+        pos for pos in positions
+        if near_start <= pos <= target
+           and is_after_protected_newline(text, pos)
+    ]
+    if linefeed_before:
+        return linefeed_before[-1]
+
+    # Otherwise use the closest safe ICU/whitespace boundary before target.
+    before = [pos for pos in positions if pos <= target]
+    if before:
+        return before[-1]
+
+    # If no safe split exists before target, allow the first safe split after target.
+    after = [pos for pos in positions if pos > target]
+    if after:
+        return after[0]
+
+    # Absolute fallback.
+    return len(text)
 
 
 def split_if_long(text, locale="en_US"):
@@ -1525,35 +1709,27 @@ def split_if_long(text, locale="en_US"):
     - Use `Locale("ko_KR")` for Korean, not just `"ko"`.
     """
     max_len = 500
+
     if len(text) <= max_len:
         return [text], 1
 
-    word_bi = BreakIterator.createWordInstance(Locale(locale))
-    word_bi.setText(text)
-    word_boundaries = list(word_bi)
-    word_buckets = {}
-    for b in word_boundaries:
-        bucket_index = b // max_len
-        if bucket_index not in word_buckets or b > word_buckets[bucket_index]:
-            word_buckets[bucket_index] = b
-    word_bounds = sorted(word_buckets.keys())
+    protected_text = preserve_escaped_sequences(text)
 
     chunks = []
-    for i in word_bounds:
-        if i == 0:
-            start = 0
-        else:
-            start = word_buckets[i - 1]
+    start = 0
 
-        if i == len(word_bounds) - 1:
-            end = len(text)
-        else:
-            end = word_buckets[i]
+    while start < len(protected_text):
+        end = choose_po_split_position(protected_text, start, max_len, locale)
 
-        chunk = text[start:end]
+        chunk = protected_text[start:end]
+
         chunk = re.sub(r"^ ", "<<LS>>", chunk)
         chunk = re.sub(r" $", "<<TS>>", chunk)
+
+        chunk = restore_escaped_sequences(chunk)
+
         chunks.append(chunk)
+        start = end
 
     return chunks, len(chunks)
 
@@ -1852,9 +2028,12 @@ def distribute_esoui_to_source_files(combined_client_file, source_client_file, s
 @mainFunction
 def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_tagged_english_text, current_tagged_english_text):
     """
-    Compare translations between different versions of language files.
+    Compare translations between different versions of tagged language files.
 
-    This function compares translations between different versions of language files and writes the results to output files.
+    This function compares translated tagged text against previous/live English tagged text and current/PTS
+    English tagged text to determine whether existing translations can still be reused. It writes the merged
+    comparison output to a filename generated from translated_tagged_text with the compared_lang_files suffix,
+    and writes the verification output to a generated filename with the compared_lang_verify suffix.
 
     Args:
         translated_tagged_text (str): The filename of the translated language file (e.g., ko.lang.txt).
@@ -1862,16 +2041,15 @@ def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_t
         current_tagged_english_text (str): The filename of the current/PTS English language file with tags (e.g., en_cur.lang_tag.txt).
 
     Notes:
-        - `translated_tagged_text` should be the translated language file, usually for another language.
-        - `previous_tagged_english_text` should be the previous/live English language file with tags.
-        - `current_tagged_english_text` should be the current/PTS English language file with tags.
-        - The output is written to "output.txt" and "verify_output.txt" files.
+        - translated_tagged_text should be the translated language file, usually for another language.
+        - previous_tagged_english_text should be the previous/live English language file with tags.
+        - current_tagged_english_text should be the current/PTS English language file with tags.
 
     The function performs the following steps:
     - Reads the translations from the specified files into dictionaries.
     - Cleans and preprocesses the texts by removing unnecessary characters and color tags.
     - Compares the PTS and live texts to determine if translation changes are needed.
-    - Writes the output to "output.txt" with potential new translations and to "verify_output.txt" for verification purposes.
+    - Writes generated comparison and verification output files.
     """
     # Generate a dynamic output filename from the translated string file
     output_filename, _ = generate_output_filename(translated_tagged_text, "compared_lang_files")
@@ -1886,6 +2064,14 @@ def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_t
     # Get Previous/Live English Text ------------------------------------------------------
     textPreviousUntranslatedDict = readTaggedLangFile(previous_tagged_english_text)
     print("Processed Previous Text")
+
+    added_english_fallback = 0
+    needs_review = 0
+    removed_obsolete = 0
+    for key in textPreviousUntranslatedDict:
+        if key not in textCurrentUntranslatedDict:
+            removed_obsolete += 1
+
     # Compare PTS with Live text, write output -----------------------------------------
     print("Begining Comparison")
     with open(output_filename, 'w', encoding="utf8", newline='\n') as out:
@@ -1897,37 +2083,51 @@ def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_t
                 previous_text = textPreviousUntranslatedDict.get(key)
 
                 # Clean tags and formatting from text strings
+                current_texture_path = None
+                translated_texture_path = None
+                if current_text is not None:
+                    current_texture_path = reEsoTexturePath.search(current_text)
+                if translatedText is not None:
+                    translated_texture_path = reEsoTexturePath.search(translatedText)
+
+                if current_texture_path and translated_texture_path:
+                    current_texture_path = current_texture_path.group(1)
+                    translated_texture_path = translated_texture_path.group(1)
+
+                    if current_texture_path != translated_texture_path:
+                        translatedText = translatedText.replace(
+                            translated_texture_path,
+                            current_texture_path
+                        )
+
+                # Clean tags and formatting from text strings
                 translatedTextStripped = cleanText(translatedText)
                 current_textStripped = cleanText(current_text)
                 previous_textStripped = cleanText(previous_text)
 
                 # Initialize default output to current_text text
                 lineOut = current_text
+
+                textsAreIdentical = False
+                textsAreSimilar = False
+                textIsFallbackEnglishText = False
+                translatedLooksTranslated = False
                 useTranslatedText = False
                 writeOutput = False  # Flag to determine whether to log to verify_output.txt
-
-                # ---Determine Change Ratio between Translated and Pts ---
-                # translatedAndPtsGreaterThanThreshold = calculate_similarity_ratio(translatedTextStripped, ptsTextStripped)
-                # live deleted, discard live text
-                # live and pts the same, use translation
-                # live and pts slightly different, use translation
-                # live and pts very different, use pts Text
-                # pts new line, use pts Text
-
-                # hasTranslation is not named well, it means that it is acceptable to use
-                # translated text if it exists
 
                 if current_textStripped is not None and previous_textStripped is not None:
                     textsAreIdentical = isIdenticalText(current_textStripped, previous_textStripped)
                     textsAreSimilar = isSimilarText(current_textStripped, previous_textStripped)
-                    textIsFallbackEnglishText = isFallbackEnglish(translatedText, current_textStripped, previous_textStripped)
 
-                    if not textIsFallbackEnglishText:
-                        if textsAreIdentical or textsAreSimilar:
-                            if translatedText is not None and isTranslatedText(translatedTextStripped):
-                                useTranslatedText = True
-                        else:
-                            writeOutput = True
+                    if translatedTextStripped is not None:
+                        textIsFallbackEnglishText = isFallbackEnglish(translatedText, current_textStripped, previous_textStripped)
+                        translatedLooksTranslated = isTranslatedText(translatedTextStripped) or not textIsFallbackEnglishText
+
+                    if textsAreIdentical or textsAreSimilar:
+                        if translatedLooksTranslated:
+                            useTranslatedText = True
+                    else:
+                        writeOutput = True
 
                 if useTranslatedText:
                     lineOut = translatedText
@@ -1935,8 +2135,12 @@ def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_t
                 lineOut = lineOut.rstrip()
                 lineOut = f"{{{{{key}:}}}}{lineOut}"
 
+                if translatedText is None:
+                    added_english_fallback += 1
+
                 if writeOutput:
                     if translatedText is not None:
+                        needs_review += 1
                         verifyOut.write(f"T{{{{{key}:}}}}{translatedText.rstrip()}\n")
                         verifyOut.write(f"L{{{{{key}:}}}}{current_text.rstrip()}\n")
                         verifyOut.write(f"P{{{{{key}:}}}}{previous_text.rstrip()}\n")
@@ -1944,28 +2148,37 @@ def compare_tagged_lang_files_for_translation(translated_tagged_text, previous_t
 
                 out.write(f"{lineOut}\n")
 
+            verifyOut.write("--------------------\n")
+            verifyOut.write("Statistics\n")
+            verifyOut.write("--------------------\n")
+            verifyOut.write(f"Added English fallback lines: {added_english_fallback}\n")
+            verifyOut.write(f"Removed obsolete lines: {removed_obsolete}\n")
+            verifyOut.write(f"Needs review: {needs_review}\n")
+
+    print(f"Added English fallback lines: {added_english_fallback}")
+    print(f"Removed obsolete lines: {removed_obsolete}")
+    print(f"Needs review: {needs_review}")
     print(f"Done. Output written to {output_filename}")
     print(f"Done. Output for verification written to {output_verify_filename}")
 
 
 @mainFunction
-def compare_esoui_files_for_translation(translated_string_file, current_english_string_file, previous_english_string_file):
-    """Compare ESOUI Text Files with Existing Translations.
+def compare_esoui_files_for_translation(translated_string_file, previous_english_string_file, current_english_string_file):
+    """
+    Compare ESOUI text files with existing translations.
 
-    This function reads three input ESOUI text files: translated_string_file, previous_english_string_file, and current_english_string_file,
-    and compares the live and PTS (Public Test Server) text files to determine whether existing translations can still be used.
+    This function reads three input ESOUI text files: translated_string_file, previous_english_string_file,
+    and current_english_string_file, then compares the live and PTS text files to determine whether existing
+    translations can still be used. The result is written to a filename generated from translated_string_file
+    with the compared_esoui_files suffix.
 
     Args:
         translated_string_file (str): The filename of the translated ESOUI text file (e.g., ko_client.str or ko_pregame.str).
         previous_english_string_file (str): The filename of the live ESOUI text file (e.g., en_client.str or en_pregame.str).
-        current_english_string_file (str): The filename of the PTS (Public Test Server) ESOUI text file (e.g., en_client.str or en_pregame.str).
+        current_english_string_file (str): The filename of the PTS ESOUI text file (e.g., en_client.str or en_pregame.str).
 
     Note:
         This function uses reLangIndex to identify language constant entries and their associated text.
-
-    The function compares the live and PTS text for each constant entry and determines whether to use
-    the existing translation or the live/PTS text. The result is saved in an 'output.txt' file containing
-    merged entries with translated text if available.
     """
 
     # Generate a dynamic output filename from the translated string file
@@ -1983,6 +2196,29 @@ def compare_esoui_files_for_translation(translated_string_file, current_english_
             translatedText = textTranslatedDict.get(key)
             current_text = textCurrentUntranslatedDict.get(key)
             previous_text = textPreviousUntranslatedDict.get(key)
+
+            if key in SPECIAL_LANGUAGE_NAMES:
+                translatedText = SPECIAL_LANGUAGE_NAMES[key]
+
+            # Clean tags and formatting from text strings
+            current_texture_path = None
+            translated_texture_path = None
+            if current_text is not None:
+                current_texture_path = reEsoTexturePath.search(current_text)
+            if translatedText is not None:
+                translated_texture_path = reEsoTexturePath.search(translatedText)
+
+            if current_texture_path and translated_texture_path:
+                current_texture_path = current_texture_path.group(1)
+                translated_texture_path = translated_texture_path.group(1)
+
+                if current_texture_path != translated_texture_path:
+                    translatedText = translatedText.replace(
+                        translated_texture_path,
+                        current_texture_path
+                    )
+
+            # Comment
             maEmptyString = reEmptyString.match(current_text)
             if maEmptyString:
                 conIndex = maEmptyString.group(1)
@@ -2411,29 +2647,90 @@ def convert_esoui_to_xliff(original_xliff_file, esoui_file):
     print(f"Updated XLIFF created: {output_filename}")
 
 
-@mainFunction
-def diff_english_lang_files(current_english_input_file, previous_english_input_file):
-    """
-    Compare differences between the current and previous 'en.lang' files after tagging.
+def isTokenOnlyText(text):
+    if not text:
+        return True
 
-    This function analyzes differences between two versions of tagged English language files:
-    the current version (e.g., PTS) and the previous version (e.g., live). It identifies and
-    categorizes differences such as matched, changed, added, and deleted entries, as well as
-    entries that are similar but not identical.
+    temp = reColorTag.sub("", text)
+
+    # Remove texture tags
+    temp = re.sub(r"\|t\d+:\d+:[^|]+\|t", "", temp)
+
+    # Remove simple ESO tokens
+    temp = re.sub(r"<<[A-Za-z]?:?\d+>>", "", temp)
+
+    # Remove whitespace
+    temp = temp.strip()
+
+    # If anything resembling a letter or number remains,
+    # then it is not token-only.
+    return not bool(re.search(r"[A-Za-z0-9]", temp))
+
+
+@mainFunction
+def extract_english_esoui_lines(input_file):
+    """
+    Extract ESOUI .str lines that do not appear translated.
+    Skips known native language-name strings and token-only strings.
+    """
+    output_filename, _ = generate_output_filename(input_file, "english_only")
+
+    with open(input_file, "r", encoding="utf8") as textIns, \
+            open(output_filename, "w", encoding="utf8", newline="\n") as out:
+
+        for line in textIns:
+            line = line.rstrip()
+            line = normalize_crowdin_csv_line(line)
+
+            maEmptyString = reEmptyString.match(line)
+            if maEmptyString:
+                continue
+
+            maClientUntaged = reClientUntaged.match(line)
+            if not maClientUntaged:
+                continue
+
+            key = maClientUntaged.group(1)
+            text = maClientUntaged.group(2) or ""
+
+            if key in SPECIAL_LANGUAGE_NAMES:
+                continue
+
+            if isTokenOnlyText(text):
+                continue
+
+            if not isTranslatedText(text):
+                out.write(f'[{key}] = "{text}"\n')
+
+    print(f"English-looking ESOUI lines written to: {output_filename}")
+
+
+@mainFunction
+def diff_tagged_lang_files(official_or_current_tagged_lang_file, candidate_or_previous_tagged_lang_file, source_tagged_lang_file=None):
+    """
+    Compare differences between two tagged language files.
+
+    This function compares an official/current tagged language file against a
+    candidate/previous tagged language file. It supports English vs English,
+    Korean vs Korean, and mixed English/Korean comparisons.
 
     Args:
-        current_english_input_file (str): Tagged English file representing the current version.
-        previous_english_input_file (str): Tagged English file representing the previous version.
+        official_or_current_tagged_lang_file (str): Tagged official/current language file.
+        candidate_or_previous_tagged_lang_file (str): Tagged candidate/previous language file.
+        source_tagged_lang_file (str, optional): Tagged source language file used for review context.
 
     Behavior:
         - Reads both files into dictionaries using `readTaggedLangFile()`.
+        - Optionally reads a source tagged language file for review context.
         - Compares entries using exact match and similarity threshold logic.
         - Categorizes results into:
-            - Matched entries
+            - Identical entries, counted in the report only
             - Close (similar) entries
             - Changed entries
             - Newly added entries
             - Deleted entries
+            - Translation candidates
+            - Current already translated entries
 
     Output:
         Uses `generate_output_filename()` to create output filenames based on the input file.
@@ -2443,45 +2740,62 @@ def diff_english_lang_files(current_english_input_file, previous_english_input_f
             - <lang_prefix> is derived from the input filename (e.g., 'en_cur')
             - <base> is the base tag like 'lang', 'pregame', etc.
             - <category> includes:
-                - matched_indexes.txt
+                - diff_tagged_lang_files_report.txt
                 - close_match_current_indexes.txt
                 - close_match_previous_indexes.txt
                 - changed_indexes.txt
                 - deleted_indexes.txt
                 - added_indexes.txt
-
-        Each output file includes a summary count and the relevant entries.
+                - translation_candidates.txt
+                - current_already_translated.txt
 
     Notes:
         - Input files must use the tagged format: {{section-index-string:}}Text
-        - This function assumes the inputs are aligned by section/key format.
+        - Translation candidates are candidate/previous translated strings where
+          official/current is not translated.
+        - translation_candidates.txt is written as normal tagged-language text:
+          {{key:}}Translated Text
+        - If source_tagged_lang_file is provided, source text is added to changed indexes
+          and current already translated entries for review context.
     """
 
-    def write_output_file(filename, targetList, targetCount, targetString):
+    def write_output_file(filename, targetList):
         with open(filename, 'w', encoding="utf8") as out:
-            lineOut = '{}: indexes {}\n'.format(targetCount, targetString)
-            out.write(lineOut)
             for line in targetList:
                 out.write(line)
 
-    # Get Current/Live English Text ------------------------------------------------------
-    textCurrentUntranslatedDict = readTaggedLangFile(current_english_input_file)
-    # Get Previous/PTS English Text ------------------------------------------------------
-    textPreviousUntranslatedDict = readTaggedLangFile(previous_english_input_file)
+    def write_tagged_output_file(filename, targetList):
+        with open(filename, 'w', encoding="utf8") as out:
+            for line in targetList:
+                out.write(line)
 
-    # Compare Live with PTS text, write output -------------------------------------------
-    matchedText = []
+    # Get Official/Current Text ----------------------------------------------------------
+    textCurrentUntranslatedDict = readTaggedLangFile(official_or_current_tagged_lang_file)
+    # Get Candidate/Previous Text --------------------------------------------------------
+    textPreviousUntranslatedDict = readTaggedLangFile(candidate_or_previous_tagged_lang_file)
+    # Get Source Text --------------------------------------------------------
+    sourceTextDict = {}
+    if source_tagged_lang_file:
+        sourceTextDict = readTaggedLangFile(source_tagged_lang_file)
+
+    # Compare official/current with candidate/previous text, write output ----------------
     closeMatchLiveText = []
     closeMatchPtsText = []
     changedText = []
     deletedText = []
     addedText = []
+    translationCandidateText = []
+    currentAlreadyTranslatedText = []
 
     addedIndexCount = 0
     matchedCount = 0
+    bothTranslatedIdenticalCount = 0
+    bothUntranslatedIdenticalCount = 0
     closMatchCount = 0
     changedCount = 0
     deletedCount = 0
+    translationCandidateCount = 0
+    currentAlreadyTranslatedCount = 0
 
     for key in textCurrentUntranslatedDict:
         current_text = textCurrentUntranslatedDict.get(key)
@@ -2491,11 +2805,35 @@ def diff_english_lang_files(current_english_input_file, previous_english_input_f
             lineOut = '{{{{{}:}}}}{}\n'.format(key, current_text)
             addedText.append(lineOut)
             continue
+
+        current_is_translated = isTranslatedText(current_text)
+        previous_is_translated = isTranslatedText(previous_text)
+
+        if previous_is_translated and not current_is_translated:
+            translationCandidateCount += 1
+            lineOut = '{{{{{}:}}}}{}\n'.format(key, previous_text)
+            translationCandidateText.append(lineOut)
+            continue
+
+        if current_is_translated and not previous_is_translated:
+            currentAlreadyTranslatedCount += 1
+
+            lineOut = '{{{{{}:current:}}}}{}\n'.format(key, current_text)
+
+            source_text = sourceTextDict.get(key)
+            if source_text:
+                lineOut += '{{{{{}:source:}}}}{}\n\n'.format(key, source_text)
+
+            currentAlreadyTranslatedText.append(lineOut)
+            continue
+
         similarity_above_threshold = calculate_similarity_and_threshold(current_text, previous_text)
         if current_text == previous_text:
             matchedCount += 1
-            lineOut = '{{{{{}:}}}}{}\n'.format(key, current_text)
-            matchedText.append(lineOut)
+            if current_is_translated and previous_is_translated:
+                bothTranslatedIdenticalCount += 1
+            elif not current_is_translated and not previous_is_translated:
+                bothUntranslatedIdenticalCount += 1
         elif similarity_above_threshold:
             closMatchCount += 1
             lineOut = '{{{{{}:}}}}{}\n'.format(key, current_text)
@@ -2504,7 +2842,13 @@ def diff_english_lang_files(current_english_input_file, previous_english_input_f
             closeMatchPtsText.append(lineOut)
         else:
             changedCount += 1
-            lineOut = '{{{{{}:previous:}}}}{}\n{{{{{}:current:}}}}{}\n\n'.format(key, previous_text, key, current_text)
+            lineOut = '{{{{{}:previous:}}}}{}\n{{{{{}:current:}}}}{}\n'.format(key, previous_text, key, current_text)
+
+            source_text = sourceTextDict.get(key)
+            if source_text:
+                lineOut += '{{{{{}:source:}}}}{}\n'.format(key, source_text)
+
+            lineOut += '\n'
             changedText.append(lineOut)
 
     for key in textPreviousUntranslatedDict:
@@ -2514,30 +2858,49 @@ def diff_english_lang_files(current_english_input_file, previous_english_input_f
             lineOut = '{{{{{}:}}}}{}\n'.format(key, previous_text)
             deletedText.append(lineOut)
 
-    print('{}: new indexes added'.format(addedIndexCount))
     print('{}: indexes matched'.format(matchedCount))
+    print('{}: both translated and identical'.format(bothTranslatedIdenticalCount))
+    print('{}: both untranslated and identical'.format(bothUntranslatedIdenticalCount))
+    print('{}: indexes added'.format(addedIndexCount))
+    print('{}: indexes deleted'.format(deletedCount))
     print('{}: indexes were a close match'.format(closMatchCount))
     print('{}: indexes changed'.format(changedCount))
-    print('{}: indexes deleted'.format(deletedCount))
+    print('{}: translation candidates'.format(translationCandidateCount))
+    print('{}: current already translated'.format(currentAlreadyTranslatedCount))
 
-    # Write matched indexes
-    output_filename, _ = generate_output_filename(current_english_input_file, "matched_indexes")
-    write_output_file(output_filename, matchedText, matchedCount, 'matched')
-    # Write close match Live indexes
-    output_filename, _ = generate_output_filename(current_english_input_file, "close_match_current_indexes")
-    write_output_file(output_filename, closeMatchLiveText, closMatchCount, 'were a close match')
-    # Write close match PTS indexes
-    output_filename, _ = generate_output_filename(current_english_input_file, "close_match_previous_indexes")
-    write_output_file(output_filename, closeMatchPtsText, closMatchCount, 'were a close match')
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "diff_tagged_lang_files_report")
+    with open(output_filename, 'w', encoding="utf8") as out:
+        out.write('{}: indexes matched\n'.format(matchedCount))
+        out.write('{}: both translated and identical\n'.format(bothTranslatedIdenticalCount))
+        out.write('{}: both untranslated and identical\n'.format(bothUntranslatedIdenticalCount))
+        out.write('{}: indexes added\n'.format(addedIndexCount))
+        out.write('{}: indexes deleted\n'.format(deletedCount))
+        out.write('{}: indexes close match\n'.format(closMatchCount))
+        out.write('{}: indexes changed\n'.format(changedCount))
+        out.write('{}: translation candidates\n'.format(translationCandidateCount))
+        out.write('{}: current already translated\n'.format(currentAlreadyTranslatedCount))
+
+    # Write close match current indexes
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "close_match_current_indexes")
+    write_output_file(output_filename, closeMatchLiveText)
+    # Write close match previous indexes
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "close_match_previous_indexes")
+    write_output_file(output_filename, closeMatchPtsText)
     # Write changed indexes
-    output_filename, _ = generate_output_filename(current_english_input_file, "changed_indexes")
-    write_output_file(output_filename, changedText, changedCount, 'changed')
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "changed_indexes")
+    write_output_file(output_filename, changedText)
     # Write deleted indexes
-    output_filename, _ = generate_output_filename(current_english_input_file, "deleted_indexes")
-    write_output_file(output_filename, deletedText, deletedCount, 'deleted')
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "deleted_indexes")
+    write_output_file(output_filename, deletedText)
     # Write added indexes
-    output_filename, _ = generate_output_filename(current_english_input_file, "added_indexes")
-    write_output_file(output_filename, addedText, addedIndexCount, 'added')
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "added_indexes")
+    write_output_file(output_filename, addedText)
+    # Write translation candidates
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "translation_candidates")
+    write_tagged_output_file(output_filename, translationCandidateText)
+    # Write current already translated
+    output_filename, _ = generate_output_filename(official_or_current_tagged_lang_file, "current_already_translated")
+    write_tagged_output_file(output_filename, currentAlreadyTranslatedText)
 
 
 # =============================================================================

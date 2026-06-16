@@ -148,6 +148,76 @@ def add_license_header(root_path, header_file):
         print("No files were updated (header may already be present).")
 
 
+@mainFunction
+def rename_live_lang_folders(root_path):
+    """
+    Rename live_lang date folders to live_lang_YYYY_MM_DD.
+
+    Handles:
+        live_lang_MM_DD_YYYY -> live_lang_YYYY_MM_DD
+        live_lang_MM_DD_YY   -> live_lang_20YY_MM_DD
+
+    Skips:
+        live_lang_YYYY_MM_DD
+    """
+    import re
+    import os
+
+    if not os.path.isdir(root_path):
+        print(f"Error: {root_path} is not a valid directory.")
+        return
+
+    already_fixed_pattern = re.compile(r"^live_lang_\d{4}_\d{1,2}_\d{1,2}$")
+    four_digit_year_pattern = re.compile(r"^live_lang_(\d{1,2})_(\d{1,2})_(\d{4})$")
+    two_digit_year_pattern = re.compile(r"^live_lang_(\d{1,2})_(\d{1,2})_(\d{2})$")
+
+    folders_to_rename = []
+
+    for name in os.listdir(root_path):
+        old_path = os.path.join(root_path, name)
+
+        if not os.path.isdir(old_path):
+            continue
+
+        if already_fixed_pattern.match(name):
+            print(f"Skipping already fixed folder: {name}")
+            continue
+
+        match = four_digit_year_pattern.match(name)
+        if match:
+            month, day, year = match.groups()
+        else:
+            match = two_digit_year_pattern.match(name)
+            if not match:
+                continue
+
+            month, day, year = match.groups()
+            year = "20" + year
+
+        new_name = f"live_lang_{year}_{int(month):02d}_{int(day):02d}"
+        new_path = os.path.join(root_path, new_name)
+
+        if name == new_name:
+            continue
+
+        folders_to_rename.append((old_path, new_path, name, new_name))
+
+    if not folders_to_rename:
+        print("No matching live_lang folders found to rename.")
+        return
+
+    for old_path, new_path, old_name, new_name in folders_to_rename:
+        if os.path.exists(new_path):
+            print(f"Skipping {old_name}: target already exists: {new_name}")
+            continue
+
+        try:
+            os.rename(old_path, new_path)
+            print(f"Renamed {old_name} -> {new_name}")
+        except Exception as e:
+            print(f"Error renaming {old_name}: {e}")
+
+
 # To run the main function
 if __name__ == "__main__":
     main()

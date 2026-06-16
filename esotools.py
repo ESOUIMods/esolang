@@ -280,7 +280,7 @@ def calculate_similarity_ratio(text1, text2):
     return similarity_ratio > 0.6
 
 
-def isFallbackEnglish(translated, current_text, previous_text):
+def isFallbackEnglish(translated, previous_text, current_text):
     return (translated == previous_text and translated != current_text) or (translated == current_text)
 
 
