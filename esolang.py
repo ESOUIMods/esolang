@@ -12,6 +12,7 @@ import polib
 import xml.etree.ElementTree as ET
 from icu import Locale, BreakIterator
 from datetime import datetime
+from slpp import slpp as lua
 
 """
 From powershell 6.1.7600.16385 you may see question marks rather then the Korean or Chinese text on windows 7.
@@ -22,6 +23,18 @@ The issue is related to the encoding used when printing Unicode characters in di
 """
 # List to hold information about callable functions
 callable_functions = []
+
+
+def convert_cli_arg(value):
+    if isinstance(value, str):
+        if value == "True":
+            return True
+        if value == "False":
+            return False
+        if value == "None":
+            return None
+
+    return value
 
 
 def mainFunction(func):
@@ -72,7 +85,7 @@ def main():
         function_name = args.function
         for func in callable_functions:
             if func.__name__ == function_name:
-                func_args = args.args
+                func_args = [convert_cli_arg(arg) for arg in args.args]
                 if func == add_index_to_lang_file and len(func_args) < 2:
                     print("Usage: {} <txtFilename> <idFilename>".format(func.__name__))
                 else:
@@ -1883,6 +1896,92 @@ def create_po_from_tagged_lang_text(translated_input_file, english_input_file, i
 
     po.save(output_po)
     print(f"PO output written to: {output_po}")
+
+
+@mainFunction
+def filter_tagged_quest_names_by_lua_ids(tagged_quest_names_file, lua_quest_names_file, stripEnglishNames=False, appendEnglishNames=False, stripEmbeddedEnglishNames=False):
+    """
+    Filter a tagged quest-name section file using valid quest IDs from a Lua quest-name table.
+
+    Keeps only tagged lang entries where the third part of the key matches a quest ID
+    from the Lua file. The quest text is not used for matching because localized files
+    may contain test, dummy, or internal quest names.
+
+    Args:
+        tagged_quest_names_file (str): Tagged quest-name section file, such as
+                                       'kr_52420949_quest_names.txt'.
+        lua_quest_names_file (str): Lua quest-name table, such as
+                                    'LibQuestData_QuestNames_en.lua'.
+        stripEnglishNames (bool): When True, removes a trailing English quest name
+                                  in parentheses from the tagged text.
+        appendEnglishNames (bool): When True, appends the matching English quest
+                                   name from the Lua file in parentheses.
+        stripEmbeddedEnglishNames (bool): When True, removes English parentheticals
+                                          anywhere in the tagged text.
+
+    Output:
+        Writes tagged lang lines in the original {{sectionId-sectionIndex-stringId:}}text format.
+    """
+    output_filename, _ = generate_output_filename(tagged_quest_names_file, "valid_quest_names")
+
+    with open(lua_quest_names_file, "r", encoding="utf8") as lua_file:
+        lua_text = lua_file.read()
+
+    table_start = lua_text.find("{")
+    table_end = lua_text.rfind("}")
+
+    if table_start == -1 or table_end == -1:
+        raise ValueError(f"Could not locate Lua table in {lua_quest_names_file}")
+
+    lua_table = lua.decode(lua_text[table_start:table_end + 1])
+
+    quest_names = {}
+    for quest_id, quest_name in lua_table.items():
+        quest_names[str(quest_id)] = quest_name
+
+    kept_count = 0
+    skipped_count = 0
+
+    with open(tagged_quest_names_file, "r", encoding="utf8") as textIns, \
+            open(output_filename, "w", encoding="utf8", newline="\n") as out:
+
+        for line in textIns:
+            line = line.rstrip()
+
+            maLangIndex = reLangIndex.match(line)
+            if not maLangIndex:
+                skipped_count += 1
+                continue
+
+            key = maLangIndex.group(1)
+            text = maLangIndex.group(2).rstrip()
+
+            key_parts = key.split("-")
+            if len(key_parts) != 3:
+                skipped_count += 1
+                continue
+
+            quest_id = key_parts[2]
+
+            if quest_id in quest_names:
+                if stripEmbeddedEnglishNames:
+                    text = re.sub(r'\s*\([A-Za-z0-9][A-Za-z0-9\s\'’`,:;.!?&\-/]*\)', '', text).rstrip()
+                elif stripEnglishNames:
+                    text = re.sub(r'\s*\([^)]*\)\s*$', '', text).rstrip()
+
+                if appendEnglishNames:
+                    english_name = quest_names.get(quest_id)
+                    if english_name:
+                        text = f"{text}: {english_name})"
+
+                out.write(f'{{{{{key}:}}}}{text}\n')
+                kept_count += 1
+            else:
+                skipped_count += 1
+
+    print(f"Filtered quest names written to: {output_filename}")
+    print(f"Kept entries: {kept_count}")
+    print(f"Skipped entries: {skipped_count}")
 
 
 def cleanText(line):
