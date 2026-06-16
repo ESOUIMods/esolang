@@ -506,6 +506,18 @@ def is_valid_language_code(code):
 
 
 def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
+    """
+    Build a generated output filename from an input language filename.
+
+    The input filename must begin with a valid two-letter language code, such as
+    en.lang, ko_267200725_map_names.txt, en_cur.lang, or en_cur_client.str.
+    Optional name_text and section information are appended to the generated base
+    name. If file_extension is not supplied, .txt is used. If output_folder is
+    supplied, the folder is created and the returned filename includes that path.
+
+    Returns:
+        tuple[str, str]: Generated output filename and base two-letter language code.
+    """
     basename = os.path.basename(translated_file).lower()
     basename = re.sub(r"(esotokorean|koreantoeso)", "", basename)
 
@@ -2670,17 +2682,19 @@ def isTokenOnlyText(text):
 @mainFunction
 def extract_english_esoui_lines(input_file):
     """
-    Extract ESOUI .str lines that do not appear translated.
-    Skips known native language-name strings and token-only strings.
+    Extract ESOUI .str entries whose text still appears to be English.
+
+    Reads lines in [KEY] = "text" format, skips empty strings, known language-name
+    strings, and token-only strings, then writes matching entries back in ESOUI
+    format for translation review.
     """
-    output_filename, _ = generate_output_filename(input_file, "english_only")
+    output_filename, _ = generate_output_filename(input_file, "esoui_english_only")
 
     with open(input_file, "r", encoding="utf8") as textIns, \
             open(output_filename, "w", encoding="utf8", newline="\n") as out:
 
         for line in textIns:
             line = line.rstrip()
-            line = normalize_crowdin_csv_line(line)
 
             maEmptyString = reEmptyString.match(line)
             if maEmptyString:
@@ -2699,10 +2713,38 @@ def extract_english_esoui_lines(input_file):
             if isTokenOnlyText(text):
                 continue
 
+            text = cleanText(text)
             if not isTranslatedText(text):
                 out.write(f'[{key}] = "{text}"\n')
 
     print(f"English-looking ESOUI lines written to: {output_filename}")
+
+
+@mainFunction
+def extract_english_tagged_lang_lines(input_file):
+    """
+    Extract tagged .lang text entries whose text still appears to be English.
+
+    Reads tagged lines in {{sectionId-sectionIndex-stringId:}}text format, skips
+    empty and token-only strings, then writes matching entries back in tagged
+    .lang text format for translation review.
+    """
+    output_filename, _ = generate_output_filename(input_file, "tagged_lang_english_only")
+
+    tagged_lines = readTaggedLangFile(input_file)
+
+    with open(output_filename, "w", encoding="utf8", newline="\n") as out:
+        for key, text in tagged_lines.items():
+            text = text or ""
+
+            if isTokenOnlyText(text):
+                continue
+
+            text = cleanText(text)
+            if not isTranslatedText(text):
+                out.write(f'{{{{{key}:}}}}{text}\n')
+
+    print(f"English-looking tagged lang lines written to: {output_filename}")
 
 
 @mainFunction
