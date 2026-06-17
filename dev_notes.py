@@ -14,6 +14,80 @@ from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 import section_constants as section
 import polib
 from collections import defaultdict
+from icu import Locale, BreakIterator
+
+# List to hold information about callable functions
+callable_functions = []
+
+
+def convert_cli_arg(value):
+    if isinstance(value, str):
+        if value == "True":
+            return True
+        if value == "False":
+            return False
+        if value == "None":
+            return None
+
+    return value
+
+
+def mainFunction(func):
+    """Decorator to mark functions as callable and add them to the list."""
+    callable_functions.append(func)
+    return func
+
+
+def print_help():
+    print("Available callable functions:")
+    for func in callable_functions:
+        print("- {}: {}".format(func.__name__, func.__doc__))
+
+
+def print_docstrings():
+    print("Docstrings for callable functions:")
+    for func in callable_functions:
+        print("\nFunction: {}".format(func.__name__))
+        docstring = inspect.getdoc(func)
+        if docstring:
+            encoded_docstring = docstring.encode('utf-8', errors='ignore').decode(sys.stdout.encoding)
+            print(encoded_docstring)
+        else:
+            print("No docstring available.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="A script to perform various operations on text files.")
+    parser.add_argument("--help-functions", action="store_true", help="Print available functions and their docstrings.")
+    parser.add_argument("--list-functions", action="store_true", help="List available functions without docstrings.")
+    parser.add_argument("--usage", action="store_true", help="Display usage information.")
+    parser.add_argument("function", nargs="?", help="The name of the function to execute.")
+    parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments for the function.")
+
+    args = parser.parse_args()
+
+    if args.usage:
+        print("Usage: dev_notes.py function [args [args ...]]")
+        print("       dev_notes.py --help-functions, or help")
+        print("       dev_notes.py --list-functions, or list")
+    elif args.help_functions or args.function == "help":
+        print_docstrings()
+    elif args.list_functions or args.function == "list":
+        print("Available functions:")
+        for func in callable_functions:
+            print(func.__name__)
+    elif args.function:
+        function_name = args.function
+        for func in callable_functions:
+            if func.__name__ == function_name:
+                func_args = [convert_cli_arg(arg) for arg in args.args]
+                func(*func_args)
+                break
+        else:
+            print("Unknown function: {}".format(function_name))
+    else:
+        print("No command provided.")
+
 
 textUntranslatedLiveDict = {}
 textUntranslatedPTSDict = {}
@@ -28,11 +102,14 @@ reItemnameTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+)\}\}(.*)$')
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text from tagged .lang text files
 reLangTagged = re.compile(r'^\{\{(\d+)-(\d+)-(\d+):\}\}(.*)$')
 
+# Tagged .lang lines with optional range: {{key:start,end}}string_text
+reTaggedLangWithRange = re.compile(r'^\{\{(\d+-\d+-\d+)(?::(\d+),(\d+))?\}\}(.*)$')
+
 # Matches a gender or neutral suffix in the format ^M, ^F, ^m, ^f, ^N, or ^n
-reGenderSuffix = re.compile(r'\^[MmFfNn]')
+reGrammaticalSuffix = re.compile(r'\^[fFmMnNpPzZ+]')
 
 # Matches a language index in the format {{identifier:}}text
-reLangIndex = re.compile(r'^\{\{([^:]+):}}(.+?)$')
+reLangIndex = re.compile(r'^\{\{([^:]+):\}\}(.+?)$')
 
 # Matches lines in the format {{sectionId-sectionIndex-stringId:}}string_text and captures only the stringId and string
 reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
@@ -41,10 +118,10 @@ reLangStringId = re.compile(r'^\{\{\d+-\d+-(\d+):\}\}(.*)$')
 reLangIndexOld = re.compile(r'^(\d{1,10}-\d{1,7}-\d{1,7}) (.+)$')
 
 # Matches untagged client strings or empty lines in the format [key] = "value" or [key] = ""
-reClientUntaged = re.compile(r'^\[(.+?)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
+reClientUntaged = re.compile(r'^\[([A-Z_0-9]+)\] = "(?!.*\{[CP]:)((?:[^"\\]|\\.)*)"$')
 
 # Matches tagged client strings in the format [key] = "{tag:value}text"
-reClientTaged = re.compile(r'^\[(.+?)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
+reClientTaged = re.compile(r'^\[([A-Z_0-9]+)\] = "(\{[CP]:.+?\})((?:[^"\\]|\\.)*)"$')
 
 # Matches empty client strings in the format [key] = ""
 reEmptyString = re.compile(r'^\[(.+?)\] = ""$')
@@ -87,6 +164,109 @@ def writeUInt32(file, value): file.write(struct.pack('>I', value))
 
 
 def writeUInt64(file, value): file.write(struct.pack('>Q', value))
+
+# Helper for escaped chars ----------------------------------------------------
+def get_section_name(section_id):
+    return section.section_info.get(section_id, {}).get("sectionName")
+
+def is_valid_language_code(code):
+    try:
+        loc = Locale(code)
+        return bool(loc.getLanguage())  # returns False if language is invalid
+    except Exception:
+        return False
+
+
+def generate_output_filename(translated_file, name_text=None, file_extension=None, section_id=None, use_section_name=None, output_filename=None, output_folder=None):
+    """
+    Build a generated output filename from an input language filename.
+
+    The input filename must begin with a valid two-letter language code, such as
+    en.lang, ko_267200725_map_names.txt, en_cur.lang, or en_cur_client.str.
+    Optional name_text and section information are appended to the generated base
+    name. If file_extension is not supplied, .txt is used. If output_folder is
+    supplied, the folder is created and the returned filename includes that path.
+
+    Returns:
+        tuple[str, str]: Generated output filename and base two-letter language code.
+    """
+    basename = os.path.basename(translated_file).lower()
+    basename = re.sub(r"(esotokorean|koreantoeso)", "", basename)
+
+    # Try to match known filename styles (most specific to most general)
+    maLangCurrentClient = re.match(r"^([a-z]{2}_cur)_(.*)\.", basename)
+    maLangPreviousClient = re.match(r"^([a-z]{2}_prv)_(.*)\.", basename)
+    maLangCurrent = re.match(r"^([a-z]{2}_cur)\.", basename)
+    maLangPrevious = re.match(r"^([a-z]{2}_prv)\.", basename)
+    maLangUnderscore = re.match(r"^([a-z]{2})_(?!cur_|prv_)(.*)\.", basename)
+    maLangName = re.match(r"^([a-z]{2})\.", basename)
+
+    match = None
+    if maLangCurrentClient:
+        match = maLangCurrentClient
+    elif maLangPreviousClient:
+        match = maLangPreviousClient
+    elif maLangCurrent:
+        match = maLangCurrent
+    elif maLangPrevious:
+        match = maLangPrevious
+    elif maLangUnderscore:
+        match = maLangUnderscore
+    elif maLangName:
+        match = maLangName
+
+    base_lang_code = None  # initialized for scope clarity
+    base_filename = ""
+    if match:
+        lang_prefix = match.group(1)
+        base_lang_code = lang_prefix[:2]
+        if match.lastindex and match.lastindex >= 2:
+            base_filename = match.group(2)
+    else:
+        raise ValueError(f"Filename '{basename}' does not match expected pattern '<lang>_<name>.txt'")
+
+    if not is_valid_language_code(base_lang_code):
+        raise ValueError(f"Language code '{base_lang_code}' is not valid.")
+
+    # Use section name if applicable
+    section_part = ""
+    if section_id:
+        if use_section_name:
+            section_name = get_section_name(section_id)
+            if re.match(r'section_unknown_\d+$', section_name):
+                section_part = f"{section_id}_unknown_section_"
+            else:
+                section_part = f"{section_id}_{section_name}_"
+        else:
+            section_part = f"{section_id}_"
+
+    # Determine base filename
+    if output_filename:
+        base_name = output_filename
+    else:
+        parts = []
+        if section_part:
+            parts.append(section_part.rstrip('_'))  # remove trailing _
+        if base_filename:
+            parts.append(base_filename.strip('_'))
+        if name_text:
+            parts.append(name_text.strip().lower().replace(' ', '_').strip('_'))
+        base_name = "_".join(filter(None, parts))  # filter(None, ...) skips empty strings
+
+    # Use requested file extension or default to .txt
+    if file_extension:
+        extension = file_extension if file_extension.startswith('.') else f".{file_extension}"
+    else:
+        extension = ".txt"
+
+    file_name = f"{lang_prefix}_{base_name}{extension}"
+
+    # Prepend output folder path if given
+    if output_folder:
+        os.makedirs(output_folder, exist_ok=True)
+        return os.path.join(output_folder, file_name), base_lang_code
+    else:
+        return file_name, base_lang_code
 
 
 def isTranslatedText(text):
@@ -1158,51 +1338,61 @@ def extract_itemnames_raw_data(input_file, input_itemids_file):
     """
     id_dict = parse_itemids_to_dict(input_itemids_file)
 
-    basename = os.path.basename(input_file)
-    if "_" in basename:
-        prefix = basename.split("_", 1)[0]
-        suffix = basename.split("_", 1)[1].rsplit(".", 1)[0]
-        output_filename = "{}_output_{}_raw.txt".format(prefix, suffix)
-    else:
-        output_filename = "output_itemnames_raw.txt"
+    output_filename = generate_output_filename(
+        translated_file=input_file,
+        name_text="itemids_raw",
+        file_extension="txt"
+    )
 
-    with open(input_file, "rb") as f, open(output_filename, "w", encoding="utf8") as out:
-        header = readUInt32(f)
+    with open(input_file, "rb") as textIns:
+        with open(output_filename, "w", encoding="utf8", newline="\n") as out:
+            header = readUInt32(textIns)
 
-        while True:
-            # Read null-terminated UTF-8 string
-            string_bytes = bytearray()
             while True:
-                char, shift = readExtendedChar(f)
-                if not char or char == b'\x00':
+                # Read null-terminated UTF-8 string
+                string_bytes = bytearray()
+
+                while True:
+                    char, shift = readExtendedChar(textIns)
+
+                    if not char or char == b'\x00':
+                        break
+
+                    string_bytes.extend(char)
+
+                if not string_bytes:
                     break
-                string_bytes.extend(char)
 
-            if not string_bytes:
-                break
+                string_value = string_bytes.decode("utf-8", errors="replace")
 
-            string_value = string_bytes.decode("utf-8", errors="replace")
+                try:
+                    position_bytes = textIns.read(4)
 
-            try:
-                position_bytes = f.read(4)
-                if len(position_bytes) < 4:
+                    if len(position_bytes) < 4:
+                        break
+
+                    position_value = struct.unpack(">I", position_bytes)[0]
+
+                    count_bytes = textIns.read(1)
+
+                    if not count_bytes:
+                        break
+
+                    item_id_count = struct.unpack(">B", count_bytes)[0]
+
+                    textIns.read(4)  # skip offset
+
+                    item_id = id_dict.get(position_value, ([0], None))[0][0]
+
+                    out.write(
+                        f"{{{{{position_value}-{item_id}-{item_id_count}}}}}{string_value}\n"
+                    )
+
+                except Exception as e:
+                    print(f"Error at string '{string_value}': {e}")
                     break
-                position_value = struct.unpack(">I", position_bytes)[0]
 
-                count_bytes = f.read(1)
-                if not count_bytes:
-                    break
-                item_id_count = struct.unpack(">B", count_bytes)[0]
-
-                f.read(4)  # skip offset
-
-                item_id = id_dict.get(position_value, ([0], None))[0][0]  # fallback 0
-                out.write("{{{{{}-{}-{}}}}}{}\n".format(position_value, item_id, item_id_count, string_value))
-            except Exception as e:
-                print("Error at string '{}': {}".format(string_value, e))
-                break
-
-    print("Done. Output written to {}".format(output_filename))
+        print(f"Done. Output written to {output_filename}")
 
 
 # These two functions process ESO language files like en_itemids.dat or pl_itemids.dat.
@@ -1276,30 +1466,3 @@ def extract_itemids_and_subtypes(input_file_path):
 
     print("Done. Output written to {}".format(output_file_path))
     print("Highest item_id encountered: {}".format(max_item_id))
-
-
-def main():
-    """ This is to be run from the fontforge UI not any version of python
-    however it won't work because arabic is right to left text with scaling
-    and combining of glyphs it was an experement and I want to preserve this
-    """
-    # Open the font file
-    font = fontforge.open("myfont.ttf")
-
-    # Define the source (Arabic) and target (Chinese) Unicode code point ranges
-    source_start = 0x0600
-    target_start = 0x6E00
-
-    num_glyphs_to_copy = 11172
-    for offset in range(num_glyphs_to_copy):
-        source_unicode = source_start + offset
-        target_unicode = target_start + offset
-
-        source_glyph = font[chr(source_unicode)]
-        target_glyph = font.createMappedChar(target_unicode)
-
-        target_glyph.clear()
-        target_glyph.importOutlines(source_glyph)
-
-    font.save("modified_font.ttf")
-    font.close()
