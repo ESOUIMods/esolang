@@ -22,6 +22,18 @@ The issue is related to the encoding used when printing Unicode characters in di
 callable_functions = []
 
 
+def convert_cli_arg(value):
+    if isinstance(value, str):
+        if value == "True":
+            return True
+        if value == "False":
+            return False
+        if value == "None":
+            return None
+
+    return value
+
+
 def mainFunction(func):
     """Decorator to mark functions as callable and add them to the list."""
     callable_functions.append(func)
@@ -70,7 +82,7 @@ def main():
         function_name = args.function
         for func in callable_functions:
             if func.__name__ == function_name:
-                func_args = args.args
+                func_args = [convert_cli_arg(arg) for arg in args.args]
                 func(*func_args)
                 break
         else:
@@ -911,6 +923,91 @@ def extract_itemnames_for_rebuild(input_itemnames_file, input_itemids_file):
             ))
 
     print("Done. Output written to {}".format(output_filename))
+
+
+@mainFunction
+def extract_itemnames_raw_data(input_file, input_itemids_file):
+    """
+    Parses itemnames.dat and itemids.dat to output each associated itemId as:
+    {{position-item_id-count}}string_text
+
+    Notes:
+    - Does not use parse_itemnames_to_dict.
+    - Does not deduplicate.
+    - Expands each itemnames.dat entry by item_id_count.
+    """
+    id_dict = parse_itemids_to_dict(input_itemids_file)
+    sorted_positions = sorted(id_dict.keys())
+    highest_item_id = 0
+    highest_item_name = ""
+
+    output_filename, _ = generate_output_filename(
+        input_file,
+        "extracted_itemnames_raw"
+    )
+
+    with open(input_file, "rb") as textIns:
+        with open(output_filename, "w", encoding="utf8", newline="\n") as out:
+            header = readUInt32(textIns)
+
+            while True:
+                string_bytes = bytearray()
+
+                while True:
+                    char, shift = readExtendedChar(textIns)
+
+                    if not char or char == b'\x00':
+                        break
+
+                    string_bytes.extend(char)
+
+                if not string_bytes:
+                    break
+
+                string_value = string_bytes.decode("utf-8", errors="replace")
+
+                try:
+                    position_bytes = textIns.read(4)
+
+                    if len(position_bytes) < 4:
+                        break
+
+                    position_value = struct.unpack(">I", position_bytes)[0]
+
+                    count_bytes = textIns.read(1)
+
+                    if not count_bytes:
+                        break
+
+                    item_id_count = struct.unpack(">B", count_bytes)[0]
+
+                    textIns.read(4)  # skip offset
+
+                    if position_value not in id_dict:
+                        print(f"Warning: Position {position_value} not found in itemids file. Skipping.")
+                        continue
+
+                    start_index = sorted_positions.index(position_value)
+                    item_positions = sorted_positions[start_index:start_index + item_id_count]
+
+                    for item_position in item_positions:
+                        values, _ = id_dict[item_position]
+                        item_id = values[0]
+
+                        if item_id > highest_item_id:
+                            highest_item_id = item_id
+                            highest_item_name = string_value
+
+                        out.write(
+                            f"{{{{{item_position}-{item_id}-{item_id_count}}}}}{string_value}\n"
+                        )
+
+                except Exception as e:
+                    print(f"Error at string '{string_value}': {e}")
+                    break
+
+    print(f"Highest itemId: {highest_item_id}: {highest_item_name}")
+    print(f"Done. Output written to {output_filename}")
 
 
 @mainFunction

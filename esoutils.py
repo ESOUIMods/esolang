@@ -9,6 +9,18 @@ import icu
 callable_functions = []
 
 
+def convert_cli_arg(value):
+    if isinstance(value, str):
+        if value == "True":
+            return True
+        if value == "False":
+            return False
+        if value == "None":
+            return None
+
+    return value
+
+
 def mainFunction(func):
     """Decorator to mark functions as callable and add them to the list."""
     callable_functions.append(func)
@@ -57,7 +69,7 @@ def main():
         function_name = args.function
         for func in callable_functions:
             if func.__name__ == function_name:
-                func_args = args.args
+                func_args = [convert_cli_arg(arg) for arg in args.args]
                 func(*func_args)
                 break
         else:
