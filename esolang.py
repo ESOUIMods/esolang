@@ -1972,7 +1972,7 @@ def filter_tagged_quest_names_by_lua_ids(tagged_quest_names_file, lua_quest_name
                 if appendEnglishNames:
                     english_name = quest_names.get(quest_id)
                     if english_name:
-                        text = f"{text}: {english_name})"
+                        text = f"{text}: {english_name}"
 
                 out.write(f'{{{{{key}:}}}}{text}\n')
                 kept_count += 1
@@ -1982,6 +1982,56 @@ def filter_tagged_quest_names_by_lua_ids(tagged_quest_names_file, lua_quest_name
     print(f"Filtered quest names written to: {output_filename}")
     print(f"Kept entries: {kept_count}")
     print(f"Skipped entries: {skipped_count}")
+
+
+@mainFunction
+def strip_english_parentheticals_from_tagged_lang_file(tagged_lang_file, stripTrailingEnglishNames=True, stripEmbeddedEnglishNames=True):
+    """
+    Remove English parentheticals from a tagged lang file.
+
+    This is a generic cleanup function for tagged lang text where translated strings
+    may include an English reference name in parentheses, such as item names, map names,
+    quest names, or other extracted sections.
+
+    Args:
+        tagged_lang_file (str): Tagged lang file using {{sectionId-sectionIndex-stringId:}}text format.
+        stripTrailingEnglishNames (bool): When True, removes a trailing English parenthetical.
+        stripEmbeddedEnglishNames (bool): When True, removes English parentheticals anywhere in the text.
+
+    Output:
+        Writes tagged lang lines in the original {{sectionId-sectionIndex-stringId:}}text format.
+    """
+    output_filename, _ = generate_output_filename(tagged_lang_file, "strip_english_parentheticals")
+
+    kept_count = 0
+    skipped_count = 0
+
+    with open(tagged_lang_file, "r", encoding="utf8") as textIns, \
+            open(output_filename, "w", encoding="utf8", newline="\n") as out:
+
+        for line in textIns:
+            line = line.rstrip()
+
+            maLangIndex = reLangIndex.match(line)
+            if not maLangIndex:
+                skipped_count += 1
+                continue
+
+            key = maLangIndex.group(1)
+            text = maLangIndex.group(2).rstrip()
+
+            if stripEmbeddedEnglishNames:
+                text = re.sub(r'\s*\([A-Za-z0-9][A-Za-z0-9\s\'’`,:;.!?&\-/]*\)', '', text).rstrip()
+
+            if stripTrailingEnglishNames:
+                text = re.sub(r'\s*\([^)]*\)\s*$', '', text).rstrip()
+
+            out.write(f'{{{{{key}:}}}}{text}\n')
+            kept_count += 1
+
+    print(f"Cleaned tagged lang file written to: {output_filename}")
+    print(f"Written entries: {kept_count}")
+    print(f"Skipped lines: {skipped_count}")
 
 
 def cleanText(line):
@@ -2912,12 +2962,15 @@ def diff_tagged_lang_files(official_or_current_tagged_lang_file, candidate_or_pr
 
     # Get Official/Current Text ----------------------------------------------------------
     textCurrentUntranslatedDict = readTaggedLangFile(official_or_current_tagged_lang_file)
+    print("Processed Current/Official Text")
     # Get Candidate/Previous Text --------------------------------------------------------
     textPreviousUntranslatedDict = readTaggedLangFile(candidate_or_previous_tagged_lang_file)
+    print("Processed Previous/Candidate Text")
     # Get Source Text --------------------------------------------------------
     sourceTextDict = {}
     if source_tagged_lang_file:
         sourceTextDict = readTaggedLangFile(source_tagged_lang_file)
+        print("Processed Source Text")
 
     # Compare official/current with candidate/previous text, write output ----------------
     closeMatchLiveText = []
